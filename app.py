@@ -184,7 +184,6 @@ def price_trend_stats(results_by_date: dict[str, list]) -> list[dict]:
             dict(
                 date=dt.date.fromisoformat(date_iso),
                 mean=statistics.fmean(prices) if prices else None,
-                median=statistics.median(prices) if prices else None,
                 min=min(prices) if prices else None,
                 max=max(prices) if prices else None,
                 count=len(prices),
@@ -762,17 +761,35 @@ def render_route_map(
     st.caption(caption + ".")
 
 
+def nice_log_ticks(lo: float, hi: float) -> list[float]:
+    """Round 1-2-5-per-decade values spanning [lo, hi] (e.g. 200, 300, 500,
+    1000, 2000) — Plotly's own log-axis minor ticks label as bare digits
+    ("7", "6", "5"...) with no indication of scale, which reads as noise
+    without the surrounding decade context."""
+    if lo <= 0 or hi <= 0 or lo > hi:
+        return []
+    start_pow = math.floor(math.log10(lo))
+    end_pow = math.ceil(math.log10(hi))
+    ticks = {
+        m * 10**p
+        for p in range(start_pow, end_pow + 1)
+        for m in (1, 2, 5)
+        if lo * 0.9 <= m * 10**p <= hi * 1.1
+    }
+    return sorted(ticks)
+
+
 def build_price_trend_chart(
     trend: list[dict], center_date: dt.date, currency: str, style: dict
 ) -> go.Figure:
-    """Average/median price per day across the search window, with each
-    day's actual lowest/highest observed fare drawn as vertical bars
-    extending up/down from the average."""
+    """Average price per day across the search window, with each day's
+    actual lowest/highest observed fare drawn as vertical bars extending
+    up/down from the average."""
     dates = [row["date"] for row in trend]
     means = [row["mean"] for row in trend]
-    medians = [row["median"] for row in trend]
     mins = [row["min"] for row in trend]
     maxes = [row["max"] for row in trend]
+    all_prices = [v for v in (*means, *mins, *maxes) if v is not None]
     # error_y needs numeric magnitudes, not None, for days with no fares —
     # 0 draws a zero-length (invisible) bar, matching how means/mins/maxes
     # are already None for those days.
@@ -787,7 +804,6 @@ def build_price_trend_chart(
     zeros = [0] * len(dates)
 
     avg_color = style["route_colors"][0]
-    median_color = style["route_colors"][1]
     # Cheap→pricey color scale reusing the app's existing status hues (the
     # same green/amber/red already used for stop counts), so the Average
     # line's markers double as a heatmap and the lowest day pops out without
@@ -818,8 +834,14 @@ def build_price_trend_chart(
             # renders in this color instead of going invisible too.
             marker=dict(size=0, color=style["stop_bad"]),
             error_y=dict(
-                type="data", array=max_reach, arrayminus=zeros, color=style["stop_bad"], width=5
+                type="data",
+                array=max_reach,
+                arrayminus=zeros,
+                color=style["stop_bad"],
+                thickness=1.25,
+                width=2,
             ),
+            opacity=0.7,
             name="Highest fare",
             customdata=maxes,
             hovertemplate=f"Highest: %{{customdata:.0f}} {currency}<extra></extra>",
@@ -832,8 +854,14 @@ def build_price_trend_chart(
             mode="markers",
             marker=dict(size=0, color=style["stop_ok"]),
             error_y=dict(
-                type="data", array=zeros, arrayminus=min_reach, color=style["stop_ok"], width=5
+                type="data",
+                array=zeros,
+                arrayminus=min_reach,
+                color=style["stop_ok"],
+                thickness=1.25,
+                width=2,
             ),
+            opacity=0.7,
             name="Lowest fare",
             customdata=mins,
             hovertemplate=f"Lowest: %{{customdata:.0f}} {currency}<extra></extra>",
@@ -857,17 +885,6 @@ def build_price_trend_chart(
             hovertemplate=f"Average: %{{y:.0f}} {currency}<extra></extra>",
         )
     )
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=medians,
-            mode="lines+markers",
-            name="Median price",
-            line=dict(color=median_color, width=2.5, dash="dash"),
-            marker=dict(size=5, color=median_color),
-            hovertemplate=f"Median: %{{y:.0f}} {currency}<extra></extra>",
-        )
-    )
 
     if known_means:
         cheapest = min((row for row in trend if row["mean"] is not None), key=lambda r: r["mean"])
@@ -889,8 +906,12 @@ def build_price_trend_chart(
 
     # add_vline chokes on date-typed x-axes in some Plotly versions — a shape
     # anchored to the x axis (yref="paper" spans the full plot height) is the
-    # version-safe way to mark the searched date.
+    # version-safe way to mark the searched date. A wider, translucent copy
+    # underneath gives it a glow halo, the same technique the route map uses
+    # for its highlighted flight paths — makes it read as "the" reference
+    # point rather than just another gridline.
     center_iso = center_date.isoformat()
+    search_color = "#00f0ff"
     fig.add_shape(
         type="line",
         xref="x",
@@ -899,17 +920,45 @@ def build_price_trend_chart(
         x1=center_iso,
         y0=0,
         y1=1,
-        line=dict(color=style["legend_font"], width=1, dash="dot"),
+        line=dict(color="rgba(0,240,255,0.25)", width=8),
+        layer="below",
+    )
+    fig.add_shape(
+        type="line",
+        xref="x",
+        yref="paper",
+        x0=center_iso,
+        x1=center_iso,
+        y0=0,
+        y1=1,
+        line=dict(color=search_color, width=2),
     )
     fig.add_annotation(
         x=center_iso,
         y=1,
         yref="paper",
         yanchor="bottom",
-        text="Searched date",
+        text="<b>Searched date</b>",
         showarrow=False,
-        font=dict(color=style["legend_font"], size=11),
+        font=dict(color=search_color, size=12),
+        bgcolor=NEON_BG,
+        bordercolor=search_color,
+        borderwidth=1,
+        borderpad=4,
     )
+
+    # Plotly's log-axis autorange miscomputes badly when combined with
+    # error_y bars (observed: a legitimate price range blew up to a
+    # 10^0–10^264 axis) — setting the range explicitly from our own data
+    # sidesteps that entirely. range values for a log axis are log10 of the
+    # displayed bounds, not the bounds themselves.
+    if all_prices:
+        log_range = [math.log10(min(all_prices) * 0.85), math.log10(max(all_prices) * 1.15)]
+        tick_values = nice_log_ticks(min(all_prices), max(all_prices))
+        tick_text = [format_price(round(v), currency) for v in tick_values]
+    else:
+        log_range = None
+        tick_values = tick_text = None
 
     fig.update_layout(
         height=340,
@@ -931,6 +980,11 @@ def build_price_trend_chart(
         ),
         yaxis=dict(
             title=dict(text=f"Price ({currency})", font=dict(color=style["legend_title_font"])),
+            type="log",
+            range=log_range,
+            tickmode="array",
+            tickvals=tick_values,
+            ticktext=tick_text,
             gridcolor="rgba(255,255,255,0.08)",
             color=style["legend_font"],
             tickfont=dict(color=style["legend_font"]),
