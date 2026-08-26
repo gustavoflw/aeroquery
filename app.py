@@ -490,7 +490,7 @@ def render_results(
         render_route_map(plottable, skipped, len(results), style, highlighted_indices)
 
 
-st.set_page_config(page_title="MyFlights", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Aeroquery", page_icon="✈️", layout="wide")
 st.title("✈️ Flight Search")
 
 if "highlighted_indices" not in st.session_state:
