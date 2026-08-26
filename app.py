@@ -137,16 +137,20 @@ def inject_neon_theme() -> None:
     """Global chrome for the full neon theme: dark gradient backdrop, glowing
     title/button/inputs. Targets Streamlit's data-testid hooks (stable across
     releases) rather than its auto-generated emotion classes."""
-    st.markdown(
-        """<style>
-        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap');
-
-        [data-testid="stApp"] {
+    background_css = f"""
+        [data-testid="stApp"] {{
             background:
                 radial-gradient(1200px 600px at 12% -10%, rgba(0,240,255,0.12), transparent 60%),
                 radial-gradient(1000px 700px at 105% 15%, rgba(255,43,214,0.12), transparent 55%),
-                linear-gradient(180deg, #0a0118 0%, #050010 100%);
-        }
+                linear-gradient(180deg, {NEON_BG} 0%, #050010 100%);
+        }}
+    """
+    st.markdown(
+        """<style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap');
+        """
+        + background_css
+        + """
         [data-testid="stApp"], [data-testid="stApp"] p, [data-testid="stApp"] label,
         [data-testid="stApp"] span {
             color: #e7e6f5;
