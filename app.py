@@ -338,36 +338,40 @@ def render_itinerary_card(
     total = format_duration(route_total_duration(flight))
     layover_color = style["layover_accent"]
 
+    # Streamlit's default markdown-table CSS puts a faint border on every
+    # <td>; with border-collapse those merge into a full grid, so each cell
+    # below explicitly opts back out with border:none.
     rows = []
     for leg in legs:
         dep = f"{leg.departure.time[0]:02d}:{leg.departure.time[1]:02d}"
         arr = f"{leg.arrival.time[0]:02d}:{leg.arrival.time[1]:02d}"
         rows.append(
             '<tr style="font-size:0.85rem;">'
-            f'<td style="padding:1px 8px 1px 0;white-space:nowrap;">'
+            f'<td style="border:none;padding:1px 8px 1px 0;white-space:nowrap;">'
             f"<b>{leg.from_airport.code}</b> {dep}</td>"
-            '<td style="padding:1px 6px;opacity:0.5;">→</td>'
-            f'<td style="padding:1px 12px 1px 0;white-space:nowrap;">'
+            '<td style="border:none;padding:1px 6px;opacity:0.5;">→</td>'
+            f'<td style="border:none;padding:1px 12px 1px 0;white-space:nowrap;">'
             f"<b>{leg.to_airport.code}</b> {arr}</td>"
-            f'<td style="padding:1px 0;opacity:0.6;font-size:0.78rem;white-space:nowrap;">'
-            f"{leg.duration} min · {leg.plane_type}</td>"
+            f'<td style="border:none;padding:1px 0;opacity:0.6;font-size:0.78rem;'
+            f'white-space:nowrap;">{leg.duration} min · {leg.plane_type}</td>'
             "</tr>"
         )
         wait = layovers.get(leg.to_airport.code)
         if wait is not None:
             rows.append(
-                '<tr><td colspan="4" style="padding:1px 0 5px 0;font-size:0.78rem;'
-                f'color:{layover_color};">'
+                '<tr><td colspan="4" style="border:none;padding:1px 0 5px 0;'
+                f'font-size:0.78rem;text-align:center;color:{layover_color};">'
                 f"⋯ layover at {leg.to_airport.code}: {format_duration(wait)} ⋯</td></tr>"
             )
     # Total time closes out the same right-hand column the per-leg
     # duration/aircraft text sits in, with a hairline over it enclosing the
     # legs above like a table footer.
+    hairline = "border:none;border-top:1px solid rgba(128,128,128,0.25);"
     rows.append(
-        '<tr style="border-top:1px solid rgba(128,128,128,0.25);">'
-        '<td colspan="3"></td>'
-        '<td style="padding:4px 0 0 0;font-size:0.8rem;font-weight:600;opacity:0.85;'
-        f'white-space:nowrap;">Total: {total}</td>'
+        "<tr>"
+        f'<td colspan="3" style="{hairline}"></td>'
+        f'<td style="{hairline}padding:4px 0 0 0;font-size:0.8rem;font-weight:600;'
+        f'opacity:0.85;white-space:nowrap;">Total: {total}</td>'
         "</tr>"
     )
     table_style = "border-collapse:collapse;width:100%;margin-top:4px;"
