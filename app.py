@@ -76,6 +76,66 @@ ARC_POINTS_PER_LEG = 24
 """Interpolated points per leg: enough to bow lines apart and give a hover
 target along the whole path, not just at the endpoint markers."""
 
+# IATA multi-airport metropolitan area codes — passing one of these straight
+# through as from_airport/to_airport (same field an individual airport code
+# goes in) makes Google Flights search every airport in the city at once and
+# tag each result with its real originating/arriving airport, e.g. "NYC"
+# transparently covers JFK, LGA, and EWR. Not derivable from airportsdata
+# (which only groups by an airport's own city field, missing cases like
+# Newark, whose city field is "Newark" rather than "New York") — this list
+# is hand-curated and each code was confirmed live against Google Flights
+# before being added, since a wrong/nonexistent code fails silently as "no
+# flights". Only cities where that check actually returned multiple distinct
+# airports are included; single-airport "metro" codes (e.g. Berlin's "BER",
+# which collides with Berlin Brandenburg's own airport code) are left out
+# since they'd just duplicate the airport entry.
+METRO_AREAS = {
+    "NYC": ("New York", "US"),
+    "WAS": ("Washington", "US"),
+    "CHI": ("Chicago", "US"),
+    "LON": ("London", "GB"),
+    "PAR": ("Paris", "FR"),
+    "ROM": ("Rome", "IT"),
+    "MIL": ("Milan", "IT"),
+    "STO": ("Stockholm", "SE"),
+    "MOW": ("Moscow", "RU"),
+    "TYO": ("Tokyo", "JP"),
+    "SEL": ("Seoul", "KR"),
+    "YTO": ("Toronto", "CA"),
+    "YMQ": ("Montreal", "CA"),
+    "BUE": ("Buenos Aires", "AR"),
+    "RIO": ("Rio de Janeiro", "BR"),
+    "SAO": ("Sao Paulo", "BR"),
+}
+
+# Member airports per metro code, for the "narrow to a specific airport"
+# picker that appears once a metro is chosen — display/browsing only, not
+# used for the actual search (Google expands the metro code itself server
+# side; see METRO_AREAS). airportsdata's own city field is too unreliable
+# for this: grouping by it drops real majors (YYZ, YUL, EZE, GIG, SDU, BWI,
+# CIA all have a city field that doesn't match their metro's name) and pulls
+# in irrelevant general-aviation/military fields that happen to share it
+# (e.g. Washington's grouping that way includes a handful of small private
+# airstrips). Ordered by prominence, most-flown first, not alphabetically.
+METRO_MEMBERS = {
+    "NYC": ["JFK", "LGA", "EWR"],
+    "WAS": ["IAD", "DCA", "BWI"],
+    "CHI": ["ORD", "MDW"],
+    "LON": ["LHR", "LGW", "STN", "LTN", "LCY"],
+    "PAR": ["CDG", "ORY"],
+    "ROM": ["FCO", "CIA"],
+    "MIL": ["MXP", "LIN", "BGY"],
+    "STO": ["ARN", "BMA"],
+    "MOW": ["SVO", "DME", "VKO"],
+    "TYO": ["HND", "NRT"],
+    "SEL": ["ICN", "GMP"],
+    "YTO": ["YYZ", "YTZ"],
+    "YMQ": ["YUL"],
+    "BUE": ["EZE", "AEP"],
+    "RIO": ["GIG", "SDU"],
+    "SAO": ["GRU", "CGH", "VCP"],
+}
+
 
 class EuConsentFetch(FetchIntegration):
     def fetch_html(self, q: Query | str, /) -> str:
@@ -93,11 +153,14 @@ def load_airports() -> dict:
 
 
 @st.cache_data
-def airport_codes(_airports: dict) -> list[str]:
-    return sorted(_airports)
+def location_codes(_airports: dict) -> list[str]:
+    return sorted(set(_airports) | set(METRO_AREAS))
 
 
-def format_airport(code: str, airports: dict) -> str:
+def format_location(code: str, airports: dict) -> str:
+    if code in METRO_AREAS:
+        city, country = METRO_AREAS[code]
+        return f"{code} — {city}, {country} · All airports"
     info = airports.get(code)
     if not info:
         return code
@@ -235,12 +298,23 @@ def inject_neon_theme() -> None:
             letter-spacing: 0.5px;
         }
 
-        [data-testid="stForm"] {
+        /* The glow panel now wraps both the reactive origin/destination
+        pickers and the submit-gated form beneath them (see search_panel in
+        the main script), so the form itself renders borderless/transparent
+        inside it instead of getting a second nested box. */
+        .st-key-search_panel {
             background: rgba(18,10,36,0.55) !important;
             border: 1px solid rgba(0,240,255,0.30) !important;
             border-radius: 16px !important;
             box-shadow: 0 0 24px rgba(0,240,255,0.12), 0 0 60px rgba(255,43,214,0.08) !important;
             backdrop-filter: blur(10px);
+            padding: 1.5rem 1.5rem 0.5rem 1.5rem;
+        }
+        [data-testid="stForm"] {
+            border: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            padding: 0 !important;
         }
 
         [data-testid="stSelectbox"] div[role="group"],
@@ -1059,7 +1133,7 @@ if "last_map_click_curve" not in st.session_state:
     st.session_state.last_map_click_curve = None
 
 airports = load_airports()
-codes = airport_codes(airports)
+codes = location_codes(airports)
 
 query_params = st.query_params
 default_origin = query_params.get("origin", "")
@@ -1077,35 +1151,62 @@ default_currency = query_params.get("currency", DEFAULT_CURRENCY)
 if default_currency not in CURRENCY_CODES:
     default_currency = DEFAULT_CURRENCY
 
-with st.form("search_form"):
+with st.container(key="search_panel"):
+    # Origin/destination live outside the form so picking a metro city can
+    # immediately reveal its "narrow to a specific airport" dropdown — forms
+    # only rerun on submit, so nested widgets inside one can't react to each
+    # other's current value until then. The date/stops/currency/submit stay
+    # inside the form below so adjusting them doesn't re-trigger anything
+    # until "Search" is actually pressed.
     col1, col2 = st.columns(2)
-    origin = col1.selectbox(
-        "Origin airport",
+    origin_choice = col1.selectbox(
+        "Origin airport or city",
         codes,
         index=origin_index,
-        format_func=lambda c: format_airport(c, airports),
+        format_func=lambda c: format_location(c, airports),
         placeholder="Search by code, city, or airport name",
     )
-    destination = col2.selectbox(
-        "Destination airport",
+    origin = origin_choice
+    if origin_choice in METRO_AREAS:
+        origin_narrowed = col1.selectbox(
+            f"Narrow to a specific {METRO_AREAS[origin_choice][0]} airport (optional)",
+            ["All airports", *METRO_MEMBERS[origin_choice]],
+            format_func=lambda c: c if c == "All airports" else format_location(c, airports),
+        )
+        if origin_narrowed != "All airports":
+            origin = origin_narrowed
+
+    destination_choice = col2.selectbox(
+        "Destination airport or city",
         codes,
         index=destination_index,
-        format_func=lambda c: format_airport(c, airports),
+        format_func=lambda c: format_location(c, airports),
         placeholder="Search by code, city, or airport name",
     )
-    date_col, stops_col, currency_col = st.columns(3)
-    date = date_col.date_input("Departure date", value=default_date)
-    max_stops_choice = stops_col.selectbox(
-        "Max stops",
-        list(MAX_STOPS_OPTIONS),
-        index=list(MAX_STOPS_OPTIONS).index(default_max_stops),
-    )
-    currency = currency_col.selectbox(
-        "Currency",
-        CURRENCY_CODES,
-        index=CURRENCY_CODES.index(default_currency),
-    )
-    submitted = st.form_submit_button("Search")
+    destination = destination_choice
+    if destination_choice in METRO_AREAS:
+        destination_narrowed = col2.selectbox(
+            f"Narrow to a specific {METRO_AREAS[destination_choice][0]} airport (optional)",
+            ["All airports", *METRO_MEMBERS[destination_choice]],
+            format_func=lambda c: c if c == "All airports" else format_location(c, airports),
+        )
+        if destination_narrowed != "All airports":
+            destination = destination_narrowed
+
+    with st.form("search_form"):
+        date_col, stops_col, currency_col = st.columns(3)
+        date = date_col.date_input("Departure date", value=default_date)
+        max_stops_choice = stops_col.selectbox(
+            "Max stops",
+            list(MAX_STOPS_OPTIONS),
+            index=list(MAX_STOPS_OPTIONS).index(default_max_stops),
+        )
+        currency = currency_col.selectbox(
+            "Currency",
+            CURRENCY_CODES,
+            index=CURRENCY_CODES.index(default_currency),
+        )
+        submitted = st.form_submit_button("Search")
 
 # A page reload (F5) resends the last-set query params, so re-running
 # whenever they're present replays the same search without a click.
@@ -1113,7 +1214,7 @@ run_search = submitted or bool(default_origin and default_destination)
 
 if run_search:
     if not origin or not destination:
-        st.error("Please enter both an origin and a destination airport.")
+        st.error("Please enter both an origin and a destination airport or city.")
     else:
         st.query_params["origin"] = origin
         st.query_params["destination"] = destination
