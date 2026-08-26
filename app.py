@@ -16,60 +16,39 @@ from primp import Client
 # EU/EEA. Sending an already-accepted SOCS cookie skips it.
 EU_CONSENT_COOKIE = "CAESHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzIaAmVuIAEaBgiA_LyaBg"
 
-# Fixed categorical order, validated for CVD/normal-vision separation in both
-# modes — see the dataviz skill. Routes are capped at this length so every
-# route on the map gets a distinct, distinguishable color.
-MAP_STYLES = {
-    "light": dict(
-        route_colors=[
-            "#2a78d6",  # blue
-            "#eb6834",  # orange
-            "#1baf7a",  # aqua
-            "#eda100",  # yellow
-            "#e87ba4",  # magenta
-            "#008300",  # green
-            "#4a3aa7",  # violet
-            "#e34948",  # red
-        ],
-        landcolor="#f0efec",
-        countrycolor="#c3c2b7",
-        airport_dot="#898781",
-        airport_text="#52514e",
-        legend_font="#0b0b0b",
-        legend_title_font="#52514e",
-        panel_bg="rgba(252,252,251,0.92)",
-        panel_border="rgba(11,11,11,0.10)",
-        stop_ok="#1baf7a",
-        stop_warn="#eda100",
-        stop_bad="#e34948",
-        layover_accent="#a3690a",
-    ),
-    "dark": dict(
-        route_colors=[
-            "#3987e5",  # blue
-            "#d95926",  # orange
-            "#199e70",  # aqua
-            "#c98500",  # yellow
-            "#d55181",  # magenta
-            "#008300",  # green
-            "#9085e9",  # violet
-            "#e66767",  # red
-        ],
-        landcolor="#2c2c2a",
-        countrycolor="#383835",
-        airport_dot="#898781",
-        airport_text="#c3c2b7",
-        legend_font="#c3c2b7",
-        legend_title_font="#898781",
-        panel_bg="rgba(26,26,25,0.92)",
-        panel_border="rgba(255,255,255,0.10)",
-        stop_ok="#199e70",
-        stop_warn="#c98500",
-        stop_bad="#e66767",
-        layover_accent="#d9a441",
-    ),
-}
-MAX_ROUTES_ON_MAP = len(MAP_STYLES["light"]["route_colors"])
+# Full neon theme: one fixed dark cyberpunk look, not toggled by the viewer's
+# light/dark preference (see current_map_style). Route colors are the same
+# eight-hue fixed order as the muted default, re-stepped for high chroma on a
+# near-black surface and validated with the dataviz skill's
+# validate_palette.js --mode dark --surface "#0a0118": lightness band,
+# chroma floor, and contrast all pass; worst adjacent CVD ΔE 11.6, worst
+# adjacent normal-vision ΔE 16.6 (both clear the 8/15 targets).
+NEON_BG = "#0a0118"
+MAP_STYLE = dict(
+    route_colors=[
+        "#0095ff",  # blue
+        "#e86c00",  # orange
+        "#00ad8b",  # aqua
+        "#b09300",  # yellow
+        "#fc00ca",  # magenta
+        "#00b31e",  # green
+        "#7700ff",  # violet
+        "#ff002b",  # red
+    ],
+    landcolor="#140a24",
+    countrycolor="#3d2a63",
+    airport_dot="#00f0ff",
+    airport_text="#e7e6f5",
+    legend_font="#e7e6f5",
+    legend_title_font="#a79fd1",
+    panel_bg="rgba(14,7,28,0.82)",
+    panel_border="rgba(0,240,255,0.35)",
+    stop_ok="#00ad8b",
+    stop_warn="#b09300",
+    stop_bad="#ff002b",
+    layover_accent="#ffcc4d",
+)
+MAX_ROUTES_ON_MAP = len(MAP_STYLE["route_colors"])
 
 MAX_STOPS_OPTIONS = {"Any": None, "Nonstop": 0, "1 stop": 1, "2 stops": 2}
 
@@ -151,11 +130,82 @@ def search_flights(
 
 
 def current_map_style() -> dict:
-    try:
-        theme_type = st.context.theme.type
-    except Exception:
-        theme_type = None
-    return MAP_STYLES.get(theme_type, MAP_STYLES["dark"])
+    return MAP_STYLE
+
+
+def inject_neon_theme() -> None:
+    """Global chrome for the full neon theme: dark gradient backdrop, glowing
+    title/button/inputs. Targets Streamlit's data-testid hooks (stable across
+    releases) rather than its auto-generated emotion classes."""
+    st.markdown(
+        """<style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap');
+
+        [data-testid="stApp"] {
+            background:
+                radial-gradient(1200px 600px at 12% -10%, rgba(0,240,255,0.12), transparent 60%),
+                radial-gradient(1000px 700px at 105% 15%, rgba(255,43,214,0.12), transparent 55%),
+                linear-gradient(180deg, #0a0118 0%, #050010 100%);
+        }
+        [data-testid="stApp"], [data-testid="stApp"] p, [data-testid="stApp"] label,
+        [data-testid="stApp"] span {
+            color: #e7e6f5;
+        }
+        [data-testid="stHeader"] {
+            background: rgba(8,2,20,0.65) !important;
+            backdrop-filter: blur(8px);
+        }
+        [data-testid="stHeader"] svg { color: #e7e6f5 !important; fill: currentColor !important; }
+
+        [data-testid="stHeading"] h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-weight: 800;
+            color: #f5f3ff;
+            text-shadow:
+                0 0 8px rgba(0,240,255,0.85),
+                0 0 22px rgba(0,240,255,0.45),
+                0 0 46px rgba(255,43,214,0.35);
+            letter-spacing: 0.5px;
+        }
+
+        [data-testid="stForm"] {
+            background: rgba(18,10,36,0.55) !important;
+            border: 1px solid rgba(0,240,255,0.30) !important;
+            border-radius: 16px !important;
+            box-shadow: 0 0 24px rgba(0,240,255,0.12), 0 0 60px rgba(255,43,214,0.08) !important;
+            backdrop-filter: blur(10px);
+        }
+
+        [data-testid="stSelectbox"] div[role="group"],
+        [data-testid="stDateInputField"] {
+            background: rgba(18,10,36,0.65) !important;
+            border: 1px solid rgba(0,240,255,0.30) !important;
+            border-radius: 10px !important;
+            transition: box-shadow 0.15s ease, border-color 0.15s ease;
+        }
+        [data-testid="stSelectbox"] div[role="group"]:focus-within,
+        [data-testid="stDateInputField"]:focus-within {
+            border-color: rgba(0,240,255,0.9) !important;
+            box-shadow: 0 0 0 1px rgba(0,240,255,0.35), 0 0 14px rgba(0,240,255,0.55) !important;
+        }
+        [data-testid="stSelectbox"] input { color: #f2f0ff !important; }
+
+        [data-testid="stFormSubmitButton"] button {
+            background: linear-gradient(
+                135deg, rgba(0,240,255,0.20), rgba(255,43,214,0.20)
+            ) !important;
+            border: 1px solid rgba(0,240,255,0.65) !important;
+            color: #f5f3ff !important;
+            box-shadow: 0 0 10px rgba(0,240,255,0.45), 0 0 24px rgba(255,43,214,0.20) !important;
+            transition: box-shadow 0.15s ease, border-color 0.15s ease;
+        }
+        [data-testid="stFormSubmitButton"] button:hover {
+            border-color: rgba(255,43,214,0.85) !important;
+            box-shadow: 0 0 16px rgba(0,240,255,0.75), 0 0 40px rgba(255,43,214,0.5) !important;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
 
 
 def leg_datetime(sdt) -> dt.datetime:
@@ -252,6 +302,7 @@ def render_highlight_dot(idx: int, color: str, highlighted: bool) -> bool:
     st.button(key=...) → .st-key-<key> CSS hook rather than a labeled
     button, so it reads as a dot next to the title, not a separate control."""
     fill = color if highlighted else "transparent"
+    glow = f"0 0 10px {color}, 0 0 20px {color}66" if highlighted else "none"
     st.markdown(
         f"""<style>
         .st-key-swatch_{idx} button {{
@@ -259,10 +310,12 @@ def render_highlight_dot(idx: int, color: str, highlighted: bool) -> bool:
             min-height: 20px !important; height: 20px !important;
             padding: 0 !important; border-radius: 50% !important;
             background: {fill} !important; border: 1.5px solid {color} !important;
+            box-shadow: {glow} !important;
             line-height: 1;
         }}
         .st-key-swatch_{idx} button:hover {{
             background: {color} !important; border-color: {color} !important;
+            box-shadow: 0 0 10px {color}, 0 0 20px {color}66 !important;
         }}
         .st-key-swatch_{idx} button p {{ display: none; }}
         </style>""",
@@ -319,7 +372,31 @@ def render_itinerary_card(
     stops = len(legs) - 1
     badge_color = stops_color(stops, style)
 
-    with st.container(border=True):
+    # Cards without a plottable route (color is None) fall back to a neutral
+    # violet glow instead of losing the neon border entirely.
+    card_glow = color or "#7a5cff"
+    border_alpha, shadow_alpha, shadow_reach = ("aa", "66", "26px") if highlighted else (
+        "55",
+        "33",
+        "14px",
+    )
+    st.markdown(
+        f"""<style>
+        .st-key-card_{idx} {{
+            background: rgba(18,10,36,0.55) !important;
+            border: 1px solid {card_glow}{border_alpha} !important;
+            border-radius: 12px !important;
+            box-shadow: 0 0 {shadow_reach} {card_glow}{shadow_alpha} !important;
+            transition: box-shadow 0.15s ease, border-color 0.15s ease;
+        }}
+        .st-key-card_{idx}:hover {{
+            border-color: {card_glow}cc !important;
+            box-shadow: 0 0 22px {card_glow}55 !important;
+        }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
+    with st.container(border=True, key=f"card_{idx}"):
         dot_col, title_col, meta_col = st.columns(
             [0.3, 3, 1], vertical_alignment="center", gap="small"
         )
@@ -375,6 +452,7 @@ def build_route_map(
 
     fig = go.Figure()
     seen_airports: dict[str, tuple[float, float]] = {}
+    routes = []
 
     for i, (idx, flight, codes, coords) in enumerate(plottable):
         for code, info in zip(codes, coords, strict=True):
@@ -398,16 +476,42 @@ def build_route_map(
             lons.extend(leg_lons)
             lats.extend(leg_lats)
 
-        hover = route_summary(flight, currency)
         route_colors = style["route_colors"]
-        color = route_colors[i % len(route_colors)]
-        stops = len(codes) - 2
-        is_selected = idx in highlighted_indices
-        is_dimmed = bool(highlighted_indices) and not is_selected
+        routes.append(
+            dict(
+                lons=lons,
+                lats=lats,
+                color=route_colors[i % len(route_colors)],
+                hover=route_summary(flight, currency),
+                name=f"{format_price(flight.price, currency)} · {stops_label(len(codes) - 2)}",
+                is_selected=idx in highlighted_indices,
+                is_dimmed=bool(highlighted_indices) and idx not in highlighted_indices,
+            )
+        )
+
+    # Neon glow halo: a wider, low-opacity line behind each route, brighter
+    # when selected. Halo traces carry no markers, so Plotly's on_select
+    # (which needs marker hit-targets — see the real trace below) never
+    # fires on them; they only shift every later curve_number by len(routes),
+    # a fixed offset render_route_map accounts for.
+    for r in routes:
         fig.add_trace(
             go.Scattergeo(
-                lon=lons,
-                lat=lats,
+                lon=r["lons"],
+                lat=r["lats"],
+                mode="lines",
+                line=dict(width=14 if r["is_selected"] else 8, color=r["color"]),
+                opacity=(0.4 if r["is_selected"] else 0.14) * (0.3 if r["is_dimmed"] else 1.0),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    for r in routes:
+        fig.add_trace(
+            go.Scattergeo(
+                lon=r["lons"],
+                lat=r["lats"],
                 # Plotly's on_select needs actual selectable points, and a
                 # bare "lines" trace doesn't offer any — hover still works
                 # on it via a generous nearest-point search, but clicking
@@ -415,19 +519,32 @@ def build_route_map(
                 # 0) at every interpolated point make the whole path
                 # clickable while keeping the visible line unchanged.
                 mode="lines+markers",
-                line=dict(width=4 if is_selected else 2, color=color),
-                marker=dict(size=14, color=color, opacity=0),
-                opacity=0.2 if is_dimmed else 1.0,
-                name=f"{format_price(flight.price, currency)} · {stops_label(stops)}",
-                hovertext=[hover] * len(lons),
+                line=dict(width=4 if r["is_selected"] else 2, color=r["color"]),
+                marker=dict(size=14, color=r["color"], opacity=0),
+                opacity=0.2 if r["is_dimmed"] else 1.0,
+                name=r["name"],
+                hovertext=[r["hover"]] * len(r["lons"]),
                 hoverinfo="text",
             )
         )
 
+    airport_lons = [lon for _, lon in seen_airports.values()]
+    airport_lats = [lat for lat, _ in seen_airports.values()]
     fig.add_trace(
         go.Scattergeo(
-            lon=[lon for _, lon in seen_airports.values()],
-            lat=[lat for lat, _ in seen_airports.values()],
+            lon=airport_lons,
+            lat=airport_lats,
+            mode="markers",
+            marker=dict(size=20, color=style["airport_dot"]),
+            opacity=0.25,
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scattergeo(
+            lon=airport_lons,
+            lat=airport_lats,
             mode="markers+text",
             marker=dict(size=8, color=style["airport_dot"]),
             text=list(seen_airports.keys()),
@@ -501,17 +618,20 @@ def render_route_map(
     # Plotly's own selection stays "on" for a curve until something else is
     # clicked, so only react when the clicked curve actually changes —
     # otherwise every unrelated rerun (e.g. clicking a dot) would re-toggle
-    # whatever route was last clicked on the map. Each route is exactly one
-    # trace, so curve_number maps straight onto plottable's index.
+    # whatever route was last clicked on the map. build_route_map adds one
+    # non-selectable glow-halo trace per route before the real (clickable)
+    # ones, so the real traces sit at [n_routes, 2*n_routes) — offset by
+    # n_routes to get back to plottable's index.
+    n_routes = len(plottable)
     points = event.selection.points if event else []
     clicked_curve = points[-1]["curve_number"] if points else None
     if (
         clicked_curve is not None
-        and clicked_curve < len(plottable)
+        and n_routes <= clicked_curve < 2 * n_routes
         and clicked_curve != st.session_state.last_map_click_curve
     ):
         st.session_state.last_map_click_curve = clicked_curve
-        clicked_idx = plottable[clicked_curve][0]
+        clicked_idx = plottable[clicked_curve - n_routes][0]
         highlighted_indices.symmetric_difference_update({clicked_idx})
         st.rerun()
 
@@ -547,6 +667,7 @@ def render_results(
                 overflow-y: auto; padding: 12px 14px;
                 background: {style["panel_bg"]}; border: 1px solid {style["panel_border"]};
                 border-radius: 12px; backdrop-filter: blur(6px);
+                box-shadow: 0 0 26px rgba(0,240,255,0.10), 0 0 60px rgba(255,43,214,0.06);
             }}
             </style>""",
             unsafe_allow_html=True,
@@ -564,6 +685,7 @@ def render_results(
 
 
 st.set_page_config(page_title="Aeroquery", page_icon="✈️", layout="wide")
+inject_neon_theme()
 st.title("✈️ Flight Search")
 
 if "highlighted_indices" not in st.session_state:
