@@ -7,6 +7,7 @@ from typing import get_args
 import airportsdata
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from fast_flights.exceptions import FlightsNotFound
 from fast_flights.integrations.base import FetchIntegration
@@ -271,6 +272,51 @@ def inject_neon_theme() -> None:
         }
         </style>""",
         unsafe_allow_html=True,
+    )
+
+
+def inject_dropdown_scroll_fix() -> None:
+    """The airport selectboxes hold ~7,900 options in a virtualized listbox;
+    once one has a value (true after the first search, since the last pick
+    is restored from the URL), reopening it auto-scrolls the popup to that
+    value's position deep in the alphabetical list instead of the top — so
+    every reopen lands somewhere random instead of ready to type a new
+    search. That scroll is applied by a React effect that runs shortly
+    *after* the popup mounts (confirmed empirically: settles ~20ms after
+    open and never moves again), not at insertion time — so resetting
+    scrollTop immediately on mount just gets overwritten a beat later.
+    Streamlit's selectbox exposes no option to disable this, so the fix
+    reaches past it: a MutationObserver reports that *something* changed
+    under <body>, then a debounced sweep (well after React's own scroll has
+    settled) forces every open listbox back to the top. st.markdown can't
+    run <script> tags (HTML inserted that way is inert in browsers);
+    components.html renders a real iframe, whose script can reach
+    window.parent.document since everything here is same-origin."""
+    components.html(
+        """<script>
+        (function () {
+            const doc = window.parent.document;
+            if (doc.__aeroqueryScrollFixInstalled) return;
+            doc.__aeroqueryScrollFixInstalled = true;
+
+            let pending = null;
+            function scheduleReset() {
+                if (pending) return;
+                pending = setTimeout(() => {
+                    pending = null;
+                    doc.querySelectorAll("[role='listbox']").forEach((box) => {
+                        box.scrollTop = 0;
+                    });
+                }, 100);
+            }
+
+            new MutationObserver(scheduleReset).observe(doc.body, {
+                childList: true,
+                subtree: true,
+            });
+        })();
+        </script>""",
+        height=0,
     )
 
 
@@ -922,6 +968,7 @@ def render_results(
 
 st.set_page_config(page_title="Aeroquery", page_icon="✈️", layout="wide")
 inject_neon_theme()
+inject_dropdown_scroll_fix()
 st.title("✈️ A e r o q u e r y")
 
 if "highlighted_indices" not in st.session_state:
