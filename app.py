@@ -1,5 +1,7 @@
 import datetime as dt
 import math
+import statistics
+from concurrent.futures import ThreadPoolExecutor
 from typing import get_args
 
 import airportsdata
@@ -52,6 +54,11 @@ MAX_ROUTES_ON_MAP = len(MAP_STYLE["route_colors"])
 
 MAX_STOPS_OPTIONS = {"Any": None, "Nonstop": 0, "1 stop": 1, "2 stops": 2}
 
+# Every search also fetches this many days on either side of the chosen date,
+# so the price-trend chart can compare it against nearby departures.
+PRICE_TREND_WINDOW_DAYS = 15
+PRICE_TREND_MAX_WORKERS = 8
+
 CURRENCY_CODES = sorted(get_args(Currency))
 DEFAULT_CURRENCY = "EUR"
 # Symbols for commonly-used currencies; anything else falls back to a
@@ -96,7 +103,14 @@ def format_airport(code: str, airports: dict) -> str:
     return f"{code} — {info['city']}, {info['country']} · {info['name']}"
 
 
-@st.cache_data(ttl=600, show_spinner="Searching flights...")
+# Smart cache: keyed on every argument below (route "cities", date, stops,
+# currency), so each day/route/filter combination is fetched from Google at
+# most once every 24h — a search's ±15-day sweep mostly hits cache after the
+# first time, and re-running the same search later the same day is instant.
+# show_spinner is off here because the range sweep below calls this from a
+# thread pool, where Streamlit's spinner can't render; the caller wraps the
+# whole sweep in one spinner instead.
+@st.cache_data(ttl=86400, show_spinner=False)
 def search_flights(
     origin: str, destination: str, date_iso: str, max_stops: int | None, currency: str
 ):
@@ -127,6 +141,54 @@ def search_flights(
         # on those instead of raising FlightsNotFound — every shape we've
         # hit means the same thing for us: nothing to show.
         return []
+
+
+def fetch_price_trend(
+    origin: str, destination: str, center_date_iso: str, max_stops: int | None, currency: str
+) -> dict[str, list]:
+    """Fetch the searched date plus PRICE_TREND_WINDOW_DAYS days on either
+    side, concurrently. Each date is independently cached by search_flights,
+    so this is only ever slow on a genuine cache miss.
+
+    Returns {date_iso: [Flight, ...]}.
+    """
+    center = dt.date.fromisoformat(center_date_iso)
+    dates = [
+        center + dt.timedelta(days=offset)
+        for offset in range(-PRICE_TREND_WINDOW_DAYS, PRICE_TREND_WINDOW_DAYS + 1)
+    ]
+    results_by_date: dict[str, list] = {}
+    with ThreadPoolExecutor(max_workers=PRICE_TREND_MAX_WORKERS) as pool:
+        futures = {
+            pool.submit(search_flights, origin, destination, d.isoformat(), max_stops, currency): d
+            for d in dates
+        }
+        for future, d in futures.items():
+            try:
+                results_by_date[d.isoformat()] = future.result()
+            except Exception:
+                # A single date failing (network hiccup, an unexpected
+                # payload shape) shouldn't take down the whole comparison —
+                # treat it the same as "no flights found that day".
+                results_by_date[d.isoformat()] = []
+    return results_by_date
+
+
+def price_trend_stats(results_by_date: dict[str, list]) -> list[dict]:
+    """Per-day price stats across a fetch_price_trend result, sorted by date."""
+    stats = []
+    for date_iso in sorted(results_by_date):
+        prices = [f.price for f in results_by_date[date_iso]]
+        stats.append(
+            dict(
+                date=dt.date.fromisoformat(date_iso),
+                mean=statistics.fmean(prices) if prices else None,
+                median=statistics.median(prices) if prices else None,
+                std=statistics.pstdev(prices) if prices else None,
+                count=len(prices),
+            )
+        )
+    return stats
 
 
 def current_map_style() -> dict:
@@ -225,6 +287,14 @@ def format_duration(td: dt.timedelta) -> str:
 def format_price(price: int, currency: str) -> str:
     symbol = CURRENCY_SYMBOLS.get(currency)
     return f"{symbol}{price}" if symbol else f"{price} {currency}"
+
+
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Plotly color properties (e.g. fillcolor) reject the CSS #RRGGBBAA
+    shorthand used in the HTML/CSS parts of this app, so chart code needs an
+    explicit rgba() string instead."""
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def route_layovers(flight) -> list[tuple[str, dt.timedelta]]:
@@ -361,7 +431,7 @@ def render_itinerary_card(
             rows.append(
                 '<tr><td colspan="4" style="border:none;padding:1px 0 5px 0;'
                 f'font-size:0.78rem;text-align:center;color:{layover_color};">'
-                f"⋯ layover at {leg.to_airport.code}: {format_duration(wait)} ⋯</td></tr>"
+                f"layover at {leg.to_airport.code}: {format_duration(wait)}</td></tr>"
             )
     # Total time closes out the same right-hand column the per-leg
     # duration/aircraft text sits in, with a hairline over it enclosing the
@@ -653,6 +723,128 @@ def render_route_map(
     st.caption(caption + ".")
 
 
+def build_price_trend_chart(
+    trend: list[dict], center_date: dt.date, currency: str, style: dict
+) -> go.Figure:
+    """Average/median price per day across the search window, with a shaded
+    ±1 standard deviation band around the average."""
+    dates = [row["date"] for row in trend]
+    means = [row["mean"] for row in trend]
+    medians = [row["median"] for row in trend]
+    stds = [row["std"] for row in trend]
+    lower = [None if m is None else m - s for m, s in zip(means, stds, strict=True)]
+    upper = [None if m is None else m + s for m, s in zip(means, stds, strict=True)]
+
+    avg_color = style["route_colors"][0]
+    median_color = style["route_colors"][1]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=dates, y=lower, mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=upper,
+            mode="lines",
+            line=dict(width=0),
+            fill="tonexty",
+            fillcolor=hex_to_rgba(avg_color, 0.15),
+            hoverinfo="skip",
+            name="± 1 std dev",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=means,
+            mode="lines+markers",
+            name="Average price",
+            line=dict(color=avg_color, width=2.5),
+            marker=dict(size=5, color=avg_color),
+            hovertemplate=f"Average: %{{y:.0f}} {currency}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=medians,
+            mode="lines+markers",
+            name="Median price",
+            line=dict(color=median_color, width=2.5, dash="dash"),
+            marker=dict(size=5, color=median_color),
+            hovertemplate=f"Median: %{{y:.0f}} {currency}<extra></extra>",
+        )
+    )
+
+    # add_vline chokes on date-typed x-axes in some Plotly versions — a shape
+    # anchored to the x axis (yref="paper" spans the full plot height) is the
+    # version-safe way to mark the searched date.
+    center_iso = center_date.isoformat()
+    fig.add_shape(
+        type="line",
+        xref="x",
+        yref="paper",
+        x0=center_iso,
+        x1=center_iso,
+        y0=0,
+        y1=1,
+        line=dict(color=style["legend_font"], width=1, dash="dot"),
+    )
+    fig.add_annotation(
+        x=center_iso,
+        y=1,
+        yref="paper",
+        yanchor="bottom",
+        text="Searched date",
+        showarrow=False,
+        font=dict(color=style["legend_font"], size=11),
+    )
+
+    fig.update_layout(
+        height=340,
+        margin=dict(l=10, r=10, t=30, b=10),
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+            font=dict(color=style["legend_font"]),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(
+            showgrid=False, color=style["legend_font"], tickfont=dict(color=style["legend_font"])
+        ),
+        yaxis=dict(
+            title=dict(text=f"Price ({currency})", font=dict(color=style["legend_title_font"])),
+            gridcolor="rgba(255,255,255,0.08)",
+            color=style["legend_font"],
+            tickfont=dict(color=style["legend_font"]),
+        ),
+    )
+    return fig
+
+
+def render_price_trend(trend: list[dict], center_date: dt.date, currency: str, style: dict) -> None:
+    found_days = sum(1 for row in trend if row["mean"] is not None)
+    st.subheader(f"📈 Price trend — ±{PRICE_TREND_WINDOW_DAYS} days")
+    if found_days == 0:
+        st.info("No price data found in this date window.")
+        return
+    fig = build_price_trend_chart(trend, center_date, currency, style)
+    st.plotly_chart(fig, width="stretch")
+    st.caption(
+        f"{found_days} of {len(trend)} days had available fares · "
+        "shaded band shows ±1 standard deviation around the average price."
+    )
+
+
 def render_results(
     results,
     plottable,
@@ -694,7 +886,7 @@ def render_results(
 
 st.set_page_config(page_title="Aeroquery", page_icon="✈️", layout="wide")
 inject_neon_theme()
-st.title("✈️ Flight Search")
+st.title("✈️ A e r o q u e r y")
 
 if "highlighted_indices" not in st.session_state:
     st.session_state.highlighted_indices = set()
@@ -764,14 +956,19 @@ if run_search:
         st.query_params["max_stops"] = max_stops_choice
         st.query_params["currency"] = currency
 
-        results = search_flights(
-            origin, destination, date.isoformat(), MAX_STOPS_OPTIONS[max_stops_choice], currency
-        )
+        max_stops = MAX_STOPS_OPTIONS[max_stops_choice]
+        with st.spinner(f"Searching flights ±{PRICE_TREND_WINDOW_DAYS} days around {date}..."):
+            results_by_date = fetch_price_trend(
+                origin, destination, date.isoformat(), max_stops, currency
+            )
+
+        style = current_map_style()
+        render_price_trend(price_trend_stats(results_by_date), date, currency, style)
+
+        results = sorted(results_by_date.get(date.isoformat(), []), key=lambda f: f.price)
         if not results:
             st.warning("No flights found for that route and date.")
         else:
-            results = sorted(results, key=lambda f: f.price)
-            style = current_map_style()
             plottable, skipped = find_plottable_routes(results, airports)
             colors_by_index = route_colors_by_index(plottable, style)
 
