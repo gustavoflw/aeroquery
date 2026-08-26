@@ -737,6 +737,16 @@ def build_price_trend_chart(
 
     avg_color = style["route_colors"][0]
     median_color = style["route_colors"][1]
+    # Cheap→pricey color scale reusing the app's existing status hues (the
+    # same green/amber/red already used for stop counts), so the Average
+    # line's markers double as a heatmap and the lowest day pops out without
+    # having to read the axis.
+    known_means = [m for m in means if m is not None]
+    price_scale = [[0.0, style["stop_ok"]], [0.5, style["stop_warn"]], [1.0, style["stop_bad"]]]
+    # marker.color can't mix None with numbers the way y can (None there just
+    # opens a gap) — days with no fares get a 0 placeholder that's never
+    # actually drawn, since their y is None too.
+    marker_colors = [m if m is not None else 0 for m in means]
 
     fig = go.Figure()
     fig.add_trace(
@@ -762,8 +772,15 @@ def build_price_trend_chart(
             y=means,
             mode="lines+markers",
             name="Average price",
-            line=dict(color=avg_color, width=2.5),
-            marker=dict(size=5, color=avg_color),
+            line=dict(color=avg_color, width=2),
+            marker=dict(
+                size=9,
+                color=marker_colors,
+                colorscale=price_scale,
+                cmin=min(known_means) if known_means else 0,
+                cmax=max(known_means) if known_means else 1,
+                line=dict(width=1, color=NEON_BG),
+            ),
             hovertemplate=f"Average: %{{y:.0f}} {currency}<extra></extra>",
         )
     )
@@ -778,6 +795,24 @@ def build_price_trend_chart(
             hovertemplate=f"Median: %{{y:.0f}} {currency}<extra></extra>",
         )
     )
+
+    if known_means:
+        cheapest = min((row for row in trend if row["mean"] is not None), key=lambda r: r["mean"])
+        fig.add_annotation(
+            x=cheapest["date"].isoformat(),
+            y=cheapest["mean"],
+            text=f"Cheapest: {format_price(round(cheapest['mean']), currency)}",
+            showarrow=True,
+            arrowhead=2,
+            arrowcolor=style["stop_ok"],
+            ax=0,
+            ay=-36,
+            font=dict(color=style["stop_ok"], size=12),
+            bgcolor=NEON_BG,
+            bordercolor=style["stop_ok"],
+            borderwidth=1,
+            borderpad=3,
+        )
 
     # add_vline chokes on date-typed x-axes in some Plotly versions — a shape
     # anchored to the x axis (yref="paper" spans the full plot height) is the
@@ -841,7 +876,8 @@ def render_price_trend(trend: list[dict], center_date: dt.date, currency: str, s
     st.plotly_chart(fig, width="stretch")
     st.caption(
         f"{found_days} of {len(trend)} days had available fares · "
-        "shaded band shows ±1 standard deviation around the average price."
+        "shaded band shows ±1 standard deviation around the average price · "
+        "marker color scales from cheapest (green) to priciest (red)."
     )
 
 
