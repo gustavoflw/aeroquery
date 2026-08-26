@@ -1,5 +1,6 @@
 import datetime as dt
 import math
+from typing import get_args
 
 import airportsdata
 import plotly.graph_objects as go
@@ -8,6 +9,7 @@ from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from fast_flights.exceptions import FlightsNotFound
 from fast_flights.integrations.base import FetchIntegration
 from fast_flights.querying import Query
+from fast_flights.types import Currency
 from primp import Client
 
 # Google shows a cookie-consent wall instead of results to requests from the
@@ -37,6 +39,10 @@ MAP_STYLES = {
         legend_title_font="#52514e",
         panel_bg="rgba(252,252,251,0.92)",
         panel_border="rgba(11,11,11,0.10)",
+        stop_ok="#1baf7a",
+        stop_warn="#eda100",
+        stop_bad="#e34948",
+        layover_accent="#a3690a",
     ),
     "dark": dict(
         route_colors=[
@@ -57,11 +63,27 @@ MAP_STYLES = {
         legend_title_font="#898781",
         panel_bg="rgba(26,26,25,0.92)",
         panel_border="rgba(255,255,255,0.10)",
+        stop_ok="#199e70",
+        stop_warn="#c98500",
+        stop_bad="#e66767",
+        layover_accent="#d9a441",
     ),
 }
 MAX_ROUTES_ON_MAP = len(MAP_STYLES["light"]["route_colors"])
 
 MAX_STOPS_OPTIONS = {"Any": None, "Nonstop": 0, "1 stop": 1, "2 stops": 2}
+
+CURRENCY_CODES = sorted(get_args(Currency))
+DEFAULT_CURRENCY = "EUR"
+# Symbols for commonly-used currencies; anything else falls back to a
+# trailing ISO code (e.g. "275 ALL") in format_price.
+CURRENCY_SYMBOLS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "INR": "₹",
+    "BRL": "R$", "KRW": "₩", "RUB": "₽", "AUD": "A$", "CAD": "C$", "MXN": "MX$",
+    "ZAR": "R", "SEK": "kr", "NOK": "kr", "DKK": "kr", "PLN": "zł", "TRY": "₺",
+    "THB": "฿", "VND": "₫", "HKD": "HK$", "SGD": "S$", "NZD": "NZ$", "ILS": "₪",
+    "IDR": "Rp", "MYR": "RM", "PHP": "₱", "CHF": "CHF",
+}
 
 ARC_POINTS_PER_LEG = 24
 """Interpolated points per leg: enough to bow lines apart and give a hover
@@ -96,7 +118,9 @@ def format_airport(code: str, airports: dict) -> str:
 
 
 @st.cache_data(ttl=600, show_spinner="Searching flights...")
-def search_flights(origin: str, destination: str, date_iso: str, max_stops: int | None):
+def search_flights(
+    origin: str, destination: str, date_iso: str, max_stops: int | None, currency: str
+):
     query = create_query(
         flights=[
             FlightQuery(
@@ -110,6 +134,7 @@ def search_flights(origin: str, destination: str, date_iso: str, max_stops: int 
         trip="one-way",
         passengers=Passengers(adults=1),
         language="en-US",
+        currency=currency,
     )
     try:
         return get_flights(query, integration=EuConsentFetch())
@@ -143,6 +168,11 @@ def format_duration(td: dt.timedelta) -> str:
     return f"{hours}h {minutes:02d}m"
 
 
+def format_price(price: int, currency: str) -> str:
+    symbol = CURRENCY_SYMBOLS.get(currency)
+    return f"{symbol}{price}" if symbol else f"{price} {currency}"
+
+
 def route_layovers(flight) -> list[tuple[str, dt.timedelta]]:
     legs = flight.flights
     return [
@@ -163,11 +193,19 @@ def stops_label(stops: int) -> str:
     return "Direct" if stops == 0 else f"{stops} stop{'s' if stops != 1 else ''}"
 
 
-def route_summary(flight) -> str:
+def stops_color(stops: int, style: dict) -> str:
+    if stops == 0:
+        return style["stop_ok"]
+    if stops == 1:
+        return style["stop_warn"]
+    return style["stop_bad"]
+
+
+def route_summary(flight, currency: str) -> str:
     layovers = route_layovers(flight)
     total = format_duration(route_total_duration(flight))
     lines = [
-        f"<b>{'/'.join(flight.airlines)} — ${flight.price}</b>",
+        f"<b>{'/'.join(flight.airlines)} — {format_price(flight.price, currency)}</b>",
         f"{stops_label(len(layovers))} · Total time: {total}",
     ]
     for code, wait in layovers:
@@ -235,10 +273,13 @@ def render_highlight_dot(idx: int, color: str, highlighted: bool) -> bool:
     )
 
 
-def render_itinerary_card(idx: int, flight, color: str | None, highlighted: bool) -> None:
+def render_itinerary_card(
+    idx: int, flight, color: str | None, highlighted: bool, style: dict, currency: str
+) -> None:
     legs = flight.flights
     layovers = dict(route_layovers(flight))
     total = format_duration(route_total_duration(flight))
+    layover_color = style["layover_accent"]
 
     rows = []
     for leg in legs:
@@ -258,7 +299,8 @@ def render_itinerary_card(idx: int, flight, color: str | None, highlighted: bool
         wait = layovers.get(leg.to_airport.code)
         if wait is not None:
             rows.append(
-                '<tr><td colspan="4" style="padding:1px 0 5px 0;opacity:0.55;font-size:0.78rem;">'
+                '<tr><td colspan="4" style="padding:1px 0 5px 0;font-size:0.78rem;'
+                f'color:{layover_color};">'
                 f"⋯ layover at {leg.to_airport.code}: {format_duration(wait)} ⋯</td></tr>"
             )
     # Total time closes out the same right-hand column the per-leg
@@ -274,6 +316,9 @@ def render_itinerary_card(idx: int, flight, color: str | None, highlighted: bool
     table_style = "border-collapse:collapse;width:100%;margin-top:4px;"
     table_html = f'<table style="{table_style}">{"".join(rows)}</table>'
 
+    stops = len(legs) - 1
+    badge_color = stops_color(stops, style)
+
     with st.container(border=True):
         dot_col, title_col, meta_col = st.columns(
             [0.3, 3, 1], vertical_alignment="center", gap="small"
@@ -283,10 +328,12 @@ def render_itinerary_card(idx: int, flight, color: str | None, highlighted: bool
                 indices = st.session_state.highlighted_indices
                 indices.symmetric_difference_update({idx})
                 st.rerun()
-        title_col.markdown(f"**{'/'.join(flight.airlines)} — ${flight.price}**")
+        title_col.markdown(
+            f"**{'/'.join(flight.airlines)} — {format_price(flight.price, currency)}**"
+        )
         meta_col.markdown(
-            f'<div style="text-align:right;opacity:0.65;font-size:0.85rem;">'
-            f"{stops_label(len(legs) - 1)}</div>",
+            f'<div style="text-align:right;font-size:0.85rem;font-weight:600;'
+            f'color:{badge_color};">{stops_label(stops)}</div>',
             unsafe_allow_html=True,
         )
         st.markdown(table_html, unsafe_allow_html=True)
@@ -311,7 +358,9 @@ def bowed_leg_points(
     return lons, lats
 
 
-def build_route_map(plottable, style: dict, highlighted_indices: set[int]) -> go.Figure | None:
+def build_route_map(
+    plottable, style: dict, highlighted_indices: set[int], currency: str
+) -> go.Figure | None:
     """Build a route map from itineraries already resolved by find_plottable_routes."""
     if not plottable:
         return None
@@ -349,7 +398,7 @@ def build_route_map(plottable, style: dict, highlighted_indices: set[int]) -> go
             lons.extend(leg_lons)
             lats.extend(leg_lats)
 
-        hover = route_summary(flight)
+        hover = route_summary(flight, currency)
         route_colors = style["route_colors"]
         color = route_colors[i % len(route_colors)]
         stops = len(codes) - 2
@@ -369,7 +418,7 @@ def build_route_map(plottable, style: dict, highlighted_indices: set[int]) -> go
                 line=dict(width=4 if is_selected else 2, color=color),
                 marker=dict(size=14, color=color, opacity=0),
                 opacity=0.2 if is_dimmed else 1.0,
-                name=f"${flight.price} · {stops_label(stops)}",
+                name=f"{format_price(flight.price, currency)} · {stops_label(stops)}",
                 hovertext=[hover] * len(lons),
                 hoverinfo="text",
             )
@@ -430,9 +479,14 @@ def build_route_map(plottable, style: dict, highlighted_indices: set[int]) -> go
 
 
 def render_route_map(
-    plottable, skipped: int, total_results: int, style: dict, highlighted_indices: set[int]
+    plottable,
+    skipped: int,
+    total_results: int,
+    style: dict,
+    highlighted_indices: set[int],
+    currency: str,
 ) -> None:
-    fig = build_route_map(plottable, style, highlighted_indices)
+    fig = build_route_map(plottable, style, highlighted_indices, currency)
     if fig is None:
         st.info("No airport coordinates available to plot a map for these results.")
         return
@@ -472,7 +526,12 @@ def render_route_map(
 
 
 def render_results(
-    results, plottable, skipped: int, style: dict, colors_by_index: dict[int, str]
+    results,
+    plottable,
+    skipped: int,
+    style: dict,
+    colors_by_index: dict[int, str],
+    currency: str,
 ) -> None:
     """Itinerary list and map in one frame: the map fills the whole width,
     and the list floats over its left side as a scrollable, translucent
@@ -496,10 +555,12 @@ def render_results(
             st.markdown("**All itineraries**")
             for idx, flight in enumerate(results):
                 highlighted = idx in st.session_state.highlighted_indices
-                render_itinerary_card(idx, flight, colors_by_index.get(idx), highlighted)
+                render_itinerary_card(
+                    idx, flight, colors_by_index.get(idx), highlighted, style, currency
+                )
 
         highlighted_indices = st.session_state.highlighted_indices
-        render_route_map(plottable, skipped, len(results), style, highlighted_indices)
+        render_route_map(plottable, skipped, len(results), style, highlighted_indices, currency)
 
 
 st.set_page_config(page_title="Aeroquery", page_icon="✈️", layout="wide")
@@ -525,6 +586,9 @@ except ValueError:
 default_max_stops = query_params.get("max_stops", "Any")
 if default_max_stops not in MAX_STOPS_OPTIONS:
     default_max_stops = "Any"
+default_currency = query_params.get("currency", DEFAULT_CURRENCY)
+if default_currency not in CURRENCY_CODES:
+    default_currency = DEFAULT_CURRENCY
 
 with st.form("search_form"):
     col1, col2 = st.columns(2)
@@ -542,12 +606,17 @@ with st.form("search_form"):
         format_func=lambda c: format_airport(c, airports),
         placeholder="Search by code, city, or airport name",
     )
-    date_col, stops_col = st.columns(2)
+    date_col, stops_col, currency_col = st.columns(3)
     date = date_col.date_input("Departure date", value=default_date)
     max_stops_choice = stops_col.selectbox(
         "Max stops",
         list(MAX_STOPS_OPTIONS),
         index=list(MAX_STOPS_OPTIONS).index(default_max_stops),
+    )
+    currency = currency_col.selectbox(
+        "Currency",
+        CURRENCY_CODES,
+        index=CURRENCY_CODES.index(default_currency),
     )
     submitted = st.form_submit_button("Search")
 
@@ -563,9 +632,10 @@ if run_search:
         st.query_params["destination"] = destination
         st.query_params["date"] = date.isoformat()
         st.query_params["max_stops"] = max_stops_choice
+        st.query_params["currency"] = currency
 
         results = search_flights(
-            origin, destination, date.isoformat(), MAX_STOPS_OPTIONS[max_stops_choice]
+            origin, destination, date.isoformat(), MAX_STOPS_OPTIONS[max_stops_choice], currency
         )
         if not results:
             st.warning("No flights found for that route and date.")
@@ -575,4 +645,4 @@ if run_search:
             plottable, skipped = find_plottable_routes(results, airports)
             colors_by_index = route_colors_by_index(plottable, style)
 
-            render_results(results, plottable, skipped, style, colors_by_index)
+            render_results(results, plottable, skipped, style, colors_by_index, currency)
