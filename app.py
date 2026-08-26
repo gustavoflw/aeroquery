@@ -185,7 +185,8 @@ def price_trend_stats(results_by_date: dict[str, list]) -> list[dict]:
                 date=dt.date.fromisoformat(date_iso),
                 mean=statistics.fmean(prices) if prices else None,
                 median=statistics.median(prices) if prices else None,
-                std=statistics.pstdev(prices) if prices else None,
+                min=min(prices) if prices else None,
+                max=max(prices) if prices else None,
                 count=len(prices),
             )
         )
@@ -333,14 +334,6 @@ def format_duration(td: dt.timedelta) -> str:
 def format_price(price: int, currency: str) -> str:
     symbol = CURRENCY_SYMBOLS.get(currency)
     return f"{symbol}{price}" if symbol else f"{price} {currency}"
-
-
-def hex_to_rgba(hex_color: str, alpha: float) -> str:
-    """Plotly color properties (e.g. fillcolor) reject the CSS #RRGGBBAA
-    shorthand used in the HTML/CSS parts of this app, so chart code needs an
-    explicit rgba() string instead."""
-    r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
-    return f"rgba({r},{g},{b},{alpha})"
 
 
 def route_layovers(flight) -> list[tuple[str, dt.timedelta]]:
@@ -772,14 +765,26 @@ def render_route_map(
 def build_price_trend_chart(
     trend: list[dict], center_date: dt.date, currency: str, style: dict
 ) -> go.Figure:
-    """Average/median price per day across the search window, with a shaded
-    ±1 standard deviation band around the average."""
+    """Average/median price per day across the search window, with each
+    day's actual lowest/highest observed fare drawn as vertical bars
+    extending up/down from the average."""
     dates = [row["date"] for row in trend]
     means = [row["mean"] for row in trend]
     medians = [row["median"] for row in trend]
-    stds = [row["std"] for row in trend]
-    lower = [None if m is None else m - s for m, s in zip(means, stds, strict=True)]
-    upper = [None if m is None else m + s for m, s in zip(means, stds, strict=True)]
+    mins = [row["min"] for row in trend]
+    maxes = [row["max"] for row in trend]
+    # error_y needs numeric magnitudes, not None, for days with no fares —
+    # 0 draws a zero-length (invisible) bar, matching how means/mins/maxes
+    # are already None for those days.
+    max_reach = [
+        (mx - m) if (m is not None and mx is not None) else 0
+        for m, mx in zip(means, maxes, strict=True)
+    ]
+    min_reach = [
+        (m - mn) if (m is not None and mn is not None) else 0
+        for m, mn in zip(means, mins, strict=True)
+    ]
+    zeros = [0] * len(dates)
 
     avg_color = style["route_colors"][0]
     median_color = style["route_colors"][1]
@@ -795,21 +800,43 @@ def build_price_trend_chart(
     marker_colors = [m if m is not None else 0 for m in means]
 
     fig = go.Figure()
+    # Highest/lowest fare drawn as vertical bars reaching up/down from the
+    # average, rather than lines of their own — two invisible-marker traces
+    # anchored at the average price, each carrying a one-directional error
+    # bar (Plotly can't color a single error_y's plus/minus sides
+    # differently, hence two traces). Colored green/red to match the
+    # cheap→pricey scale used elsewhere on this chart (the Average markers,
+    # the cheapest callout).
     fig.add_trace(
         go.Scatter(
-            x=dates, y=lower, mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False
+            x=dates,
+            y=means,
+            mode="markers",
+            # size=0 hides the marker on the chart itself (the error bar is
+            # the whole point) while keeping full opacity, so the legend
+            # swatch — which mirrors color/opacity, not marker size — still
+            # renders in this color instead of going invisible too.
+            marker=dict(size=0, color=style["stop_bad"]),
+            error_y=dict(
+                type="data", array=max_reach, arrayminus=zeros, color=style["stop_bad"], width=5
+            ),
+            name="Highest fare",
+            customdata=maxes,
+            hovertemplate=f"Highest: %{{customdata:.0f}} {currency}<extra></extra>",
         )
     )
     fig.add_trace(
         go.Scatter(
             x=dates,
-            y=upper,
-            mode="lines",
-            line=dict(width=0),
-            fill="tonexty",
-            fillcolor=hex_to_rgba(avg_color, 0.15),
-            hoverinfo="skip",
-            name="± 1 std dev",
+            y=means,
+            mode="markers",
+            marker=dict(size=0, color=style["stop_ok"]),
+            error_y=dict(
+                type="data", array=zeros, arrayminus=min_reach, color=style["stop_ok"], width=5
+            ),
+            name="Lowest fare",
+            customdata=mins,
+            hovertemplate=f"Lowest: %{{customdata:.0f}} {currency}<extra></extra>",
         )
     )
     fig.add_trace(
@@ -922,7 +949,8 @@ def render_price_trend(trend: list[dict], center_date: dt.date, currency: str, s
     st.plotly_chart(fig, width="stretch")
     st.caption(
         f"{found_days} of {len(trend)} days had available fares · "
-        "shaded band shows ±1 standard deviation around the average price · "
+        "vertical bars reach from the average up to that day's highest fare "
+        "and down to its lowest · "
         "marker color scales from cheapest (green) to priciest (red)."
     )
 
