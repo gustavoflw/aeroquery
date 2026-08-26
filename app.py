@@ -83,6 +83,18 @@ def load_airports() -> dict:
     return airportsdata.load("IATA")
 
 
+@st.cache_data
+def airport_codes(_airports: dict) -> list[str]:
+    return sorted(_airports)
+
+
+def format_airport(code: str, airports: dict) -> str:
+    info = airports.get(code)
+    if not info:
+        return code
+    return f"{code} — {info['city']}, {info['country']} · {info['name']}"
+
+
 @st.cache_data(ttl=600, show_spinner="Searching flights...")
 def search_flights(origin: str, destination: str, date_iso: str, max_stops: int | None):
     query = create_query(
@@ -498,9 +510,14 @@ if "highlighted_indices" not in st.session_state:
 if "last_map_click_curve" not in st.session_state:
     st.session_state.last_map_click_curve = None
 
+airports = load_airports()
+codes = airport_codes(airports)
+
 query_params = st.query_params
 default_origin = query_params.get("origin", "")
 default_destination = query_params.get("destination", "")
+origin_index = codes.index(default_origin) if default_origin in codes else None
+destination_index = codes.index(default_destination) if default_destination in codes else None
 try:
     default_date = dt.date.fromisoformat(query_params.get("date", ""))
 except ValueError:
@@ -511,13 +528,19 @@ if default_max_stops not in MAX_STOPS_OPTIONS:
 
 with st.form("search_form"):
     col1, col2 = st.columns(2)
-    origin = (
-        col1.text_input("Origin airport", value=default_origin, placeholder="LIS").strip().upper()
+    origin = col1.selectbox(
+        "Origin airport",
+        codes,
+        index=origin_index,
+        format_func=lambda c: format_airport(c, airports),
+        placeholder="Search by code, city, or airport name",
     )
-    destination = (
-        col2.text_input("Destination airport", value=default_destination, placeholder="CWB")
-        .strip()
-        .upper()
+    destination = col2.selectbox(
+        "Destination airport",
+        codes,
+        index=destination_index,
+        format_func=lambda c: format_airport(c, airports),
+        placeholder="Search by code, city, or airport name",
     )
     date_col, stops_col = st.columns(2)
     date = date_col.date_input("Departure date", value=default_date)
@@ -548,7 +571,6 @@ if run_search:
             st.warning("No flights found for that route and date.")
         else:
             results = sorted(results, key=lambda f: f.price)
-            airports = load_airports()
             style = current_map_style()
             plottable, skipped = find_plottable_routes(results, airports)
             colors_by_index = route_colors_by_index(plottable, style)
