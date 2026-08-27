@@ -1,7 +1,8 @@
 import datetime as dt
 import math
 import statistics
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import get_args
 
 import airportsdata
@@ -55,9 +56,12 @@ MAX_ROUTES_ON_MAP = len(MAP_STYLE["route_colors"])
 
 MAX_STOPS_OPTIONS = {"Any": None, "Nonstop": 0, "1 stop": 1, "2 stops": 2}
 
-# Every search also fetches this many days on either side of the chosen date,
-# so the price-trend chart can compare it against nearby departures.
-PRICE_TREND_WINDOW_DAYS = 15
+# Every search also fetches one day of prices at a time across a
+# PRICE_TREND_TOTAL_DAYS span centered on the chosen date — shifted forward
+# whenever that centering would reach before today, since Google Flights has
+# no fares for past dates, so the trend always covers a full
+# PRICE_TREND_TOTAL_DAYS days into the future.
+PRICE_TREND_TOTAL_DAYS = 180
 PRICE_TREND_MAX_WORKERS = 8
 
 CURRENCY_CODES = sorted(get_args(Currency))
@@ -194,9 +198,9 @@ def search_flights(
         currency=currency,
     )
     try:
-        return get_flights(query, integration=EuConsentFetch())
+        results = get_flights(query, integration=EuConsentFetch())
     except FlightsNotFound:
-        return []
+        results = []
     except (TypeError, IndexError):
         # fast_flights' parser assumes a "no flights" response always shapes
         # up a specific way (e.g. payload[3] == [None]), but Google sends
@@ -204,30 +208,62 @@ def search_flights(
         # as bare None, payload[7] missing entries, etc). The library crashes
         # on those instead of raising FlightsNotFound — every shape we've
         # hit means the same thing for us: nothing to show.
-        return []
+        results = []
+
+    if max_stops != 0:
+        # Google's own "Best flights" ranking can quietly drop a genuinely
+        # cheaper nonstop fare from an unrestricted-stops query — confirmed
+        # live: OPO→MLA on 2026-09-18 returns 8 flights with no Ryanair
+        # under max_stops=None, but the same €33 Ryanair nonstop shows up
+        # the moment the query is restricted to max_stops=0. So always also
+        # fetch nonstop-only and fold in anything missing from the main
+        # result (the recursive call hits this same cache, keyed on its own
+        # max_stops=0, so it's free on any repeat search).
+        nonstop = search_flights(origin, destination, date_iso, 0, currency)
+        seen = {flight_identity(f) for f in results if len(f.flights) == 1}
+        results = results + [f for f in nonstop if flight_identity(f) not in seen]
+
+    return results
+
+
+def flight_identity(flight) -> tuple:
+    """Best-effort identity for a nonstop flight, used to dedupe the merge
+    above — fast_flights results carry no id of their own."""
+    leg = flight.flights[0]
+    return (flight.price, tuple(flight.airlines), leg.departure.time, leg.arrival.time)
 
 
 def fetch_price_trend(
     origin: str, destination: str, center_date_iso: str, max_stops: int | None, currency: str
 ) -> dict[str, list]:
-    """Fetch the searched date plus PRICE_TREND_WINDOW_DAYS days on either
-    side, concurrently. Each date is independently cached by search_flights,
-    so this is only ever slow on a genuine cache miss.
+    """Fetch every day across a PRICE_TREND_TOTAL_DAYS span centered on the
+    searched date, concurrently. The span shifts forward whenever centering
+    it would start before today, so it always covers a full
+    PRICE_TREND_TOTAL_DAYS days from wherever it starts. Each date is
+    independently cached by search_flights, so this is only ever slow on a
+    genuine cache miss.
 
     Returns {date_iso: [Flight, ...]}.
     """
     center = dt.date.fromisoformat(center_date_iso)
-    dates = [
-        center + dt.timedelta(days=offset)
-        for offset in range(-PRICE_TREND_WINDOW_DAYS, PRICE_TREND_WINDOW_DAYS + 1)
-    ]
+    start = max(dt.date.today(), center - dt.timedelta(days=PRICE_TREND_TOTAL_DAYS // 2))
+    dates = [start + dt.timedelta(days=offset) for offset in range(PRICE_TREND_TOTAL_DAYS + 1)]
+    total = len(dates)
+
     results_by_date: dict[str, list] = {}
+    progress = st.progress(0.0, text=f"Searched 0 of {total} days")
+    started = time.monotonic()
     with ThreadPoolExecutor(max_workers=PRICE_TREND_MAX_WORKERS) as pool:
         futures = {
             pool.submit(search_flights, origin, destination, d.isoformat(), max_stops, currency): d
             for d in dates
         }
-        for future, d in futures.items():
+        # as_completed (rather than iterating futures in submission order)
+        # so the bar advances as results actually arrive, and the ETA below
+        # is based on real elapsed-per-result pace rather than the order
+        # requests happened to be submitted in.
+        for completed, future in enumerate(as_completed(futures), start=1):
+            d = futures[future]
             try:
                 results_by_date[d.isoformat()] = future.result()
             except Exception:
@@ -235,6 +271,13 @@ def fetch_price_trend(
                 # payload shape) shouldn't take down the whole comparison —
                 # treat it the same as "no flights found that day".
                 results_by_date[d.isoformat()] = []
+            remaining = total - completed
+            eta = (time.monotonic() - started) / completed * remaining
+            eta_text = f" · ~{format_eta(eta)} left" if remaining else ""
+            progress.progress(
+                completed / total, text=f"Searched {completed} of {total} days{eta_text}"
+            )
+    progress.empty()
     return results_by_date
 
 
@@ -253,6 +296,19 @@ def price_trend_stats(results_by_date: dict[str, list]) -> list[dict]:
             )
         )
     return stats
+
+
+def cheapest_direct_flight(results_by_date: dict[str, list]) -> dict | None:
+    """The single cheapest nonstop flight found anywhere in the trend
+    window, or None if no nonstop flights turned up on any sampled day."""
+    best = None
+    for date_iso, flights in results_by_date.items():
+        for flight in flights:
+            if len(flight.flights) != 1:
+                continue
+            if best is None or flight.price < best["price"]:
+                best = dict(date=dt.date.fromisoformat(date_iso), price=flight.price)
+    return best
 
 
 def current_map_style() -> dict:
@@ -402,6 +458,11 @@ def format_duration(td: dt.timedelta) -> str:
     minutes = int(td.total_seconds() // 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}h {minutes:02d}m"
+
+
+def format_eta(seconds: float) -> str:
+    minutes, seconds = divmod(max(0, round(seconds)), 60)
+    return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
 
 
 def format_price(price: int, currency: str) -> str:
@@ -854,7 +915,11 @@ def nice_log_ticks(lo: float, hi: float) -> list[float]:
 
 
 def build_price_trend_chart(
-    trend: list[dict], center_date: dt.date, currency: str, style: dict
+    trend: list[dict],
+    center_date: dt.date,
+    currency: str,
+    style: dict,
+    direct: dict | None = None,
 ) -> go.Figure:
     """Average price per day across the search window, with each day's
     actual lowest/highest observed fare drawn as vertical bars extending
@@ -960,22 +1025,64 @@ def build_price_trend_chart(
         )
     )
 
+    # These callouts are all real marker traces sitting exactly on the point
+    # they describe (rather than a floating text annotation, which can land
+    # in an unpredictable spot and get lost against 180 days of data), with
+    # their price in the legend and on hover. Same gold "cheapest" color for
+    # all three, but a distinct shape per category so they don't read as one
+    # mark when they land close together.
+    gold = "#ffd700"
+    avg_star = dict(symbol="star", size=16, color=gold, line=dict(width=1, color=NEON_BG))
+    fare_diamond = dict(symbol="diamond", size=13, color=gold, line=dict(width=1, color=NEON_BG))
+    direct_hexagram = dict(
+        symbol="hexagram", size=15, color=gold, line=dict(width=1, color=NEON_BG)
+    )
     if known_means:
         cheapest = min((row for row in trend if row["mean"] is not None), key=lambda r: r["mean"])
-        fig.add_annotation(
-            x=cheapest["date"].isoformat(),
-            y=cheapest["mean"],
-            text=f"Cheapest: {format_price(round(cheapest['mean']), currency)}",
-            showarrow=True,
-            arrowhead=2,
-            arrowcolor=style["stop_ok"],
-            ax=0,
-            ay=-36,
-            font=dict(color=style["stop_ok"], size=12),
-            bgcolor=NEON_BG,
-            bordercolor=style["stop_ok"],
-            borderwidth=1,
-            borderpad=3,
+        fig.add_trace(
+            go.Scatter(
+                x=[cheapest["date"]],
+                y=[cheapest["mean"]],
+                mode="markers",
+                marker=avg_star,
+                name=f"Cheapest average fare: {format_price(round(cheapest['mean']), currency)}",
+                hovertemplate=(
+                    f"Cheapest average fare: {format_price(round(cheapest['mean']), currency)}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    known_min_rows = [row for row in trend if row["min"] is not None]
+    if known_min_rows:
+        cheapest_fare = min(known_min_rows, key=lambda row: row["min"])
+        fig.add_trace(
+            go.Scatter(
+                x=[cheapest_fare["date"]],
+                y=[cheapest_fare["min"]],
+                mode="markers",
+                marker=fare_diamond,
+                name=f"Cheapest fare: {format_price(round(cheapest_fare['min']), currency)}",
+                hovertemplate=(
+                    f"Cheapest fare: {format_price(round(cheapest_fare['min']), currency)}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    if direct is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[direct["date"]],
+                y=[direct["price"]],
+                mode="markers",
+                marker=direct_hexagram,
+                name=f"Cheapest direct flight: {format_price(round(direct['price']), currency)}",
+                hovertemplate=(
+                    f"Cheapest direct flight: {format_price(round(direct['price']), currency)}"
+                    "<extra></extra>"
+                ),
+            )
         )
 
     # add_vline chokes on date-typed x-axes in some Plotly versions — a shape
@@ -1067,13 +1174,19 @@ def build_price_trend_chart(
     return fig
 
 
-def render_price_trend(trend: list[dict], center_date: dt.date, currency: str, style: dict) -> None:
+def render_price_trend(
+    trend: list[dict],
+    center_date: dt.date,
+    currency: str,
+    style: dict,
+    direct: dict | None = None,
+) -> None:
     found_days = sum(1 for row in trend if row["mean"] is not None)
-    st.subheader(f"📈 Price trend — ±{PRICE_TREND_WINDOW_DAYS} days")
+    st.subheader(f"📈 Price trend — {PRICE_TREND_TOTAL_DAYS} days")
     if found_days == 0:
         st.info("No price data found in this date window.")
         return
-    fig = build_price_trend_chart(trend, center_date, currency, style)
+    fig = build_price_trend_chart(trend, center_date, currency, style, direct)
     st.plotly_chart(fig, width="stretch")
     st.caption(
         f"{found_days} of {len(trend)} days had available fares · "
@@ -1081,6 +1194,8 @@ def render_price_trend(trend: list[dict], center_date: dt.date, currency: str, s
         "and down to its lowest · "
         "marker color scales from cheapest (green) to priciest (red)."
     )
+    if direct is None:
+        st.caption("No nonstop flights found anywhere in this window.")
 
 
 def render_results(
@@ -1223,13 +1338,18 @@ if run_search:
         st.query_params["currency"] = currency
 
         max_stops = MAX_STOPS_OPTIONS[max_stops_choice]
-        with st.spinner(f"Searching flights ±{PRICE_TREND_WINDOW_DAYS} days around {date}..."):
-            results_by_date = fetch_price_trend(
-                origin, destination, date.isoformat(), max_stops, currency
-            )
+        results_by_date = fetch_price_trend(
+            origin, destination, date.isoformat(), max_stops, currency
+        )
 
         style = current_map_style()
-        render_price_trend(price_trend_stats(results_by_date), date, currency, style)
+        render_price_trend(
+            price_trend_stats(results_by_date),
+            date,
+            currency,
+            style,
+            cheapest_direct_flight(results_by_date),
+        )
 
         results = sorted(results_by_date.get(date.isoformat(), []), key=lambda f: f.price)
         if not results:
