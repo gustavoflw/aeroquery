@@ -1,0 +1,32 @@
+/* Full neon theme, ported from app.py's inject_neon_theme (see
+   .claude/js-migration-plan.md, Phase 6) — one fixed dark cyberpunk look,
+   not a light/dark toggle, matching the Streamlit original. */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap');
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 12% -10%, rgba(0, 240, 255, 0.12), transparent 60%),
+    radial-gradient(1000px 700px at 105% 15%, rgba(255, 43, 214, 0.12), transparent 55%),
+    linear-gradient(180deg, #0a0118 0%, #050010 100%);
+  background-attachment: fixed;
+  color: #e7e6f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+}

@@ -1,0 +1,107 @@
+# AeroQuery — Streamlit → JS Frontend Migration Plan
+
+**Goal:** move from a single 1,555-line Streamlit script to a real backend API + JS frontend, without a big-bang rewrite — the app stays shippable and working at every step.
+
+**Strategy: strangler fig.** A new API and frontend grow up *alongside* the current app; Streamlit keeps serving users until the new stack has full parity, then gets deleted. Nothing is ever "half-migrated and broken" for a real user.
+
+Full writeup with rationale/diagram: https://claude.ai/code/artifact/dd071037-50f9-4dee-912c-2623b3b3695a
+
+---
+
+## Why this is the right call
+
+- **True click interactions** — the airport-picker panel had to be a fixed box below the map because Streamlit/Plotly has no way to anchor UI to a click's pixel position. A JS frontend gets a real popover for free.
+- **Progressive streaming** — `fetch_price_trend`'s `on_update` callback simulates streaming by redrawing into `st.empty()` placeholders on a full script rerun each time. A real frontend does this natively with Server-Sent Events and a chart that just updates.
+- **No cancellation** — if a user navigates away mid-search, the 180-day sweep keeps running server-side regardless. A JS client can abort a `fetch`.
+- **Theming hacks** — `inject_neon_theme` and `inject_dropdown_scroll_fix` both exist to reach past Streamlit's DOM into raw CSS/JS injection. Both become unnecessary with real components.
+
+Most of `app.py`'s logic is already framework-agnostic: `search_flights`, the price-trend math, and the chart-building code (`build_route_map`, `build_price_trend_chart`) are plain Python returning Plotly figure objects — which are just JSON, so `react-plotly.js` can render them with **zero porting**. Only the UI-glue layer (widgets, session state, the `st.empty()` streaming hack, CSS/JS injection workarounds) actually gets replaced.
+
+---
+
+## Phase 0 — Extract a framework-agnostic core (zero user-visible change) ✅ done
+
+- [x] Create `core/flights.py` — move `search_flights`, `fetch_flights_with_retry`, `flight_identity`, `price_trend_window`, `fetch_price_trend` (strip `st.empty`/`progress_slot`, keep the `on_update` callback shape), `price_trend_stats`, `cheapest_direct_flight`
+  - `fetch_price_trend` also gained an `on_progress(completed, total, eta_seconds)` callback replacing the direct `st.progress` calls — app.py wires it to a progress bar, but core no longer knows Streamlit exists.
+- [x] Create `core/airports.py` — move `load_airports`, `location_codes`, `format_location`, `METRO_AREAS`, `METRO_MEMBERS`, `all_airport_codes`
+- [x] Create `core/charts.py` — move `build_route_map`, `build_price_trend_chart`, `find_plottable_routes`, `route_colors_by_index`, `bowed_leg_points`, `nice_log_ticks`
+  - `find_plottable_routes` now takes `style` and derives its route cap from `len(style["route_colors"])` instead of a module constant, so it doesn't need to import app.py's theme.
+- [x] Create `core/format.py` — move `format_price`, `format_duration`, `format_eta`, `stops_label`, `stops_color`, `route_layovers`, `route_total_duration`, `route_summary`
+- [x] Replace `@st.cache_data(ttl=86400)` with `cachetools.TTLCache` + `@cached(..., lock=threading.Lock())` — verified the lock only guards cache dict access (not the fetch itself), so the 8-way concurrent thread pool sweep stays fully parallel
+- [x] `app.py` becomes a thin caller of `core.*` — verified via live search (OPO→MLA), a full Streamlit boot, and the on_update/on_progress streaming contract tests
+- [x] Add first `pytest` unit tests against `core/` — 36 tests across `tests/test_{format,airports,flights,charts}.py`, all passing; added `cachetools` + `pytest` as dependencies and `pythonpath = ["."]` to pyproject.toml
+
+## Phase 1 — Stand up a FastAPI backend alongside Streamlit (still no visible change) ✅ done
+
+- [x] Scaffold `api/` service (FastAPI) wrapping `core.*` — `api/main.py`, run with `uv run uvicorn api.main:app --reload --port 8000`
+- [x] `GET /api/airports` — every airport (city/country/name/lat/lon) + metro-area groupings; meant to be fetched once and cached client-side
+- [x] `GET /api/search?origin=&destination=&date=&max_stops=&currency=` — sorted itinerary list + route map figure JSON
+  - Deviation from the original sketch: `build_route_map` gained an `include_all_airports` flag, and `/api/search` uses `include_all_airports=False` — the ~7,884-point all-airports trace (with a hover string per airport) would otherwise get re-sent on *every* search response; a client holding `/api/airports` can overlay it itself instead. Streamlit's own map is unaffected (defaults to `True`).
+  - `MAP_STYLE` moved from `app.py` into `core/charts.py` so the API and Streamlit build figures against one canonical theme instead of risking drift.
+- [x] `GET /api/trend?...` — SSE stream, one `data: {...}` event per `on_progress`/`on_update` firing (`{"type": "progress", ...}` / `{"type": "trend", "stats": [...], "cheapest_direct": ...}`), stream just ends on completion (no separate terminal event needed)
+  - Deviation from the original sketch: events carry `price_trend_stats`/`cheapest_direct_flight` output (already lightweight, pre-aggregated) rather than raw `results_by_date` or a full chart figure per event — much smaller payload for the same information; a frontend rebuilds its own chart from `stats`.
+  - Implementation note: `fetch_price_trend` is sync (it runs its own internal thread pool), so the endpoint offloads it to FastAPI's default executor and relays its callbacks through a plain thread-safe `queue.Queue` into the async SSE generator.
+- [x] Verify all three endpoints — hermetic `pytest` tests (`tests/test_api.py`, mocked backend, 3 tests) plus live verification via `curl` against real Google Flights data for all three endpoints, run alongside Streamlit on a separate port with no changes to the Streamlit app's behavior
+
+## Phase 2 — Scaffold the JS frontend, deployed dark ✅ done
+
+- [x] Set up Vite + React + TypeScript project — `web/`, scaffolded via `npm create vite@latest web -- --template react-ts`
+- [x] Add `react-plotly.js` (+ `plotly.js` + `@types/*` for both)
+- [x] Build a "hello world" page hitting `/api/airports`, not linked from the live app yet — `web/src/App.tsx`, shows airport/metro counts + a sample lookup
+  - Added a Vite dev-server proxy (`web/vite.config.ts`) routing `/api/*` → `http://127.0.0.1:8000`, so the browser sees same-origin requests and FastAPI needs no CORS config for local dev.
+  - Verified live end-to-end: `uv run uvicorn api.main:app --reload --port 8000` + `npm run dev` (in `web/`), confirmed via curl through the Vite proxy against real Google Flights data for both `/api/airports` and `/api/search`. `npm run build` and `npx tsc --noEmit` both clean; `npm run lint` (oxlint) clean.
+  - Note for next time you run this locally: Vite's dev server binds `[::1]` (IPv6 loopback) by default, not `127.0.0.1` — use `http://localhost:5173` (or whatever port it picks), not `127.0.0.1`, if it seems unreachable.
+
+## Phase 3 — Migrate the search form + itinerary list ✅ done
+
+- [x] Build origin/destination/date/stops/currency form in React — `web/src/SearchForm.tsx` + `web/src/LocationInput.tsx` (a custom ranked-search combobox over `/api/airports`' ~7,900 entries: code-prefix match ranks above word-prefix, ranks above bare substring; keyboard nav + click-outside-to-close)
+- [x] Wire it to `GET /api/search` — `web/src/api.ts`
+- [x] Port `render_itinerary_card`'s markup to a React component, render the sorted itinerary list (no map yet) — `web/src/ItineraryCard.tsx`; layover/total-duration math ported to `web/src/ItineraryCard.tsx`'s `minutesBetween` (works directly off the naive ISO datetimes `/api/search` already returns, no new backend field needed)
+  - Small aligned refactor along the way: `MAX_STOPS_OPTIONS`/`CURRENCY_CODES`/`DEFAULT_CURRENCY` moved from `app.py` into new `core/config.py` (same pattern as `MAP_STYLE` in Phase 1), and a new `GET /api/config` exposes them plus `core.format.CURRENCY_SYMBOLS` — so the currency list/symbol table/stop-filter options are defined once in Python and can't drift from what the JS form offers.
+- [x] Dogfood this slice — verified in a real headless-Chromium session (Playwright, since `chromium-cli` wasn't available in this environment): loaded the form, searched OPO → MLA by typing partial names into both location inputs, submitted, got 12 real itineraries back sorted by price with correct stop-count coloring, correct layover math (e.g. "layover at CDG: 8h 25m"), and correct total-duration math — zero console errors. Screenshots confirm the layout renders cleanly.
+
+## Phase 4 — Port the route map ✅ done
+
+- [x] Render the figure JSON from `/api/search` via `react-plotly.js` — `web/src/RouteMap.tsx`. The dark "neon" theme just worked with zero extra effort — it's baked into the figure JSON `core/charts.py` already builds.
+- [x] Port click-to-toggle-highlight (route click) using Plotly.js's `onClick` (`plotly_click`) as local React state — `applyHighlighting` in `RouteMap.tsx` reimplements `build_route_map`'s per-route halo/opacity formulas client-side, so highlighting restyles instantly with no round trip to the backend at all (an improvement over the Streamlit version, which needed a full rerun).
+- [x] Port click-to-pick-airport as a real popover (replacing the fixed below-map panel) — `web/src/AirportPickerPopover.tsx`, positioned at the click's actual `clientX`/`clientY` via `position: fixed`. This is the capability Streamlit fundamentally couldn't offer (no way to anchor UI to a Plotly click's pixel position), now working as originally envisioned.
+  - The backend's `/api/search` deliberately omits the ~7,884-point all-airports trace (Phase 1's `include_all_airports=False`); `RouteMap.tsx` builds that trace itself client-side from the already-fetched `/api/airports` data and appends it, exactly as planned.
+  - Added `route_result_indices` to `/api/search`'s response — maps each plotted route back to its position in `results`, needed for the frontend to know which itinerary a clicked route corresponds to (Python's `plottable[i][0]` already had this internally; it just wasn't exposed before).
+  - `SearchForm` became a fully controlled component (form state lifted to `App.tsx`) so picking an airport on the map can set origin/destination and immediately trigger a new search — mirroring `app.py`'s "a page reload resends the last-set query params" auto-search behavior.
+  - Verified in a real headless-Chromium session (Playwright): clicked a route → it highlighted in the map's own bright color while every other route dimmed to near-invisibility (confirmed via both a screenshot and the underlying trace opacities); clicked an all-airports dot (located precisely via its DOM `getBoundingClientRect()`, filtered to ones actually inside the visible map viewport, since a naive percentage-of-container guess can land off-canvas or land on a point that's geographically off-screen at the current zoom) → popover appeared exactly at the click position with the correct airport; clicked "Set as origin" → form field updated and a real new search fired automatically, correctly returning "0 itineraries found" for that (genuinely flight-less) route with no errors. Zero console errors throughout. `tsc`, `oxlint`, and `vite build` all clean.
+
+## Phase 5 — Port the price trend chart + streaming ✅ done
+
+- [x] Connect to `/api/trend` via `EventSource` — `web/src/trendStream.ts`
+  - Added an explicit `{"type": "done"}` terminal SSE event in `api/main.py`: plain `EventSource` treats a closed connection as "reconnect", not "finished" — without an explicit signal, the browser would eventually retry and silently kick off a second, redundant 180-day sweep. The client calls `source.close()` synchronously on receiving it.
+- [x] Update the `react-plotly.js` trend chart per partial payload — `web/src/PriceTrendChart.tsx` + `web/src/trendChartMath.ts`
+  - Deviation from the original sketch, consistent with Phase 1's earlier decision: since `/api/trend` streams pre-aggregated `stats` rather than a figure per event, `build_price_trend_chart` itself got ported to TypeScript (`trendChartMath.ts`) rather than reused as figure JSON — this is the one piece of chart logic that couldn't just be handed across as-is. `price_trend_window` and `nice_log_ticks` were ported too, since they're pure date/number arithmetic with no framework dependency either way.
+  - `/api/config` was extended with `map_style`/`neon_bg` (both already pulled from `core.charts`) so the JS-built chart uses the exact same theme colors as the Python-built route map, rather than a hand-typed duplicate that could drift.
+- [x] Port the progress bar — `web/src/ProgressBar.tsx`, driven by the stream's `progress` events
+- [x] Verify the fixed x-axis-range behavior carries through unchanged — `priceTrendWindow()` in `trendChartMath.ts` is computed independently client-side (pure date arithmetic needing no data), same as the Python original, and passed to the chart on every redraw so the axis stays fixed while points fill in.
+  - Architecture note (diverges from the original single-call sketch): `/api/search` (itinerary list + map) and `/api/trend` (progressive chart) are now two independent, concurrent requests fired together on submit, rather than one combined flow — `/api/search` typically resolves in 1-2 requests while `/api/trend` can take up to ~181, so running them in parallel gets the itinerary list on screen sooner instead of waiting on any part of the sweep.
+  - Verified in a real browser end-to-end: progress bar appeared in ~5s, the chart's point count grew monotonically from 1 (searched date, resolves first) to 181 over the course of the sweep with live ETA updates, itinerary list/map rendered independently and concurrently, the progress bar correctly disappeared on the `done` event, and zero console errors throughout (confirming no runaway reconnect). Final chart shows all expected elements: error bars, gold star/diamond/hexagram markers, the searched-date marker, legend, and caption text — a faithful match to the Streamlit original.
+
+## Phase 6 — Theming & polish ✅ done
+
+- [x] Port `inject_neon_theme`'s CSS to a real stylesheet — `web/src/index.css` (global dark gradient backdrop + Orbitron title, replacing the leftover Vite scaffold styling that shipped since Phase 2) and `web/src/App.css` (glass-panel search form, glowing focus states, gradient submit button, dark itinerary cards with per-stop-count glow matching `stopsColor`, themed dropdown/popover/progress-bar/route-map wrapper). Not a byte-for-byte port of the original Streamlit-selector CSS (impossible given a totally different DOM), but a faithful match of the same dark-cyberpunk color language and glow treatment.
+  - One fix needed along the way: the itinerary card's glow color comes from a per-card inline `style`, so `box-shadow: ... currentcolor` would've picked up text color, not the border color — switched to a `--card-glow` CSS custom property set alongside `borderColor` in `ItineraryCard.tsx`.
+- [x] Delete the need for `inject_dropdown_scroll_fix` — nothing to delete, and nothing was ever needed: `LocationInput` was built from scratch as a plain filtered `<ul>` (Phase 3), not a virtualized listbox, so it was never subject to the bug that CSS/JS hack existed to work around. Confirmed via a live browser screenshot — the dropdown opens fresh and correctly ranked every time.
+- [x] Port `st.query_params` syncing to the browser History API — `web/src/urlParams.ts` (`readFormStateFromUrl`/`writeFormStateToUrl`, via `history.replaceState`, matching Streamlit's own no-new-history-entry behavior). `App.tsx`'s mount effect now reads and validates origin/destination/date/max_stops/currency from the URL (dropping anything unrecognized, same as `app.py`'s `origin_index`/`default_max_stops`/`default_currency` fallbacks) and auto-fires a search if both origin and destination resolve — mirroring "a page reload resends the last-set query params."
+  - Fixed a stale-closure bug while wiring this up: calling `runSearch` synchronously right after `setConfig()` on mount would still read the old (null) `config` from the React state closure, since the update hadn't committed yet. Split `runSearch` into a public wrapper (reads `config` from state, for normal call sites) and `runSearchWithConfig` (takes it as a parameter, for the mount effect to call directly with the just-fetched value).
+  - Verified live: submitting a search updates the URL with all 5 params; reloading that URL pre-fills the form (with full formatted labels) and auto-fires a new search with zero user interaction, producing the same 13 results; a bare URL has no query params. Zero console errors.
+
+## Phase 7 — Cutover & decommission
+
+- [ ] Parity checklist: search, map (+ click interactions), price trend (+ streaming), airport picker, metro narrowing, currency formatting, theming
+- [ ] Flip default route to the new frontend; keep Streamlit at `/legacy` for a bake period
+- [ ] Delete Streamlit-specific code, drop the `streamlit` dependency
+- [ ] Final stack confirmed: `core/` (pure Python) + FastAPI + JS frontend
+
+---
+
+## Cross-cutting notes (keep in mind throughout, not phase-bound)
+
+- **Caching goes shared.** A FastAPI TTL cache is shared across all users (more cache hits), but cache-stampede handling (two users searching the same route on a cold cache) starts to matter in a way it didn't with per-session `st.cache_data`.
+- **SSE over WebSocket.** One-directional server→client fits SSE via FastAPI's `StreamingResponse`. WebSocket would only earn its keep for future genuine search cancellation.
+- **Effort shape.** Phases 0–1 are highest-leverage/lowest-risk and stand on their own even if the JS rewrite stalls later. Phases 3–5 are the bulk of the calendar time — mostly interaction wiring, not business logic.
