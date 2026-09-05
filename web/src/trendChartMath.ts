@@ -2,8 +2,6 @@ import type * as Plotly from 'plotly.js'
 import { formatPrice } from './format'
 import type { CheapestDirect, MapStyle, TrendStat } from './types'
 
-export const PRICE_TREND_TOTAL_DAYS = 180
-
 function toDateOnly(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
@@ -15,18 +13,22 @@ function addDays(dateIso: string, days: number): string {
 }
 
 // Mirrors core.flights.price_trend_window — plain date arithmetic, so it's
-// ported directly rather than fetched from the backend. ISO "YYYY-MM-DD"
-// strings sort lexicographically the same as chronologically, so string
-// comparison stands in for Python's max(today, ...) without needing Date
-// object comparisons at all.
-export function priceTrendWindow(centerDateIso: string): [string, string] {
+// ported directly rather than fetched from the backend. `totalDays` is the
+// number of dates the sweep covers (config.price_trend_days; 1 by default,
+// meaning start === end). ISO "YYYY-MM-DD" strings sort lexicographically
+// the same as chronologically, so string comparison stands in for Python's
+// max(today, ...) without needing Date object comparisons at all.
+export function priceTrendWindow(centerDateIso: string, totalDays: number): [string, string] {
+  const span = Math.max(0, totalDays - 1)
   const today = toDateOnly(new Date())
-  const centerMinus90 = addDays(centerDateIso, -Math.floor(PRICE_TREND_TOTAL_DAYS / 2))
-  const start = centerMinus90 > today ? centerMinus90 : today
-  return [start, addDays(start, PRICE_TREND_TOTAL_DAYS)]
+  const centerShifted = addDays(centerDateIso, -Math.floor(span / 2))
+  const start = centerShifted > today ? centerShifted : today
+  return [start, addDays(start, span)]
 }
 
-// Mirrors core.charts.nice_log_ticks.
+// Round 1-2-5-per-decade tick values spanning [lo, hi] for the log y-axis.
+// (Was core.charts.nice_log_ticks in Python, dropped when the price-trend
+// chart moved entirely client-side.)
 export function niceLogTicks(lo: number, hi: number): number[] {
   if (lo <= 0 || hi <= 0 || lo > hi) return []
   const startPow = Math.floor(Math.log10(lo))
@@ -45,13 +47,16 @@ function notNull<T>(v: T | null): v is T {
   return v !== null
 }
 
-// Mirrors core.charts.build_price_trend_chart. Ported to JS (rather than
-// reusing backend-built figure JSON, the way RouteMap does) because
-// /api/trend deliberately streams pre-aggregated stats instead of a figure
-// per event — see api/main.py's get_trend docstring. Kept as loosely-typed
-// plain objects rather than fighting Plotly's (quite restrictive) generated
-// trace/shape/annotation unions for an exact match; Plotly.js accepts this
-// shape at runtime regardless of how strictly TS would type it.
+// Builds the price-trend chart figure client-side (rather than reusing
+// backend-built figure JSON, the way RouteMap does) because /api/trend
+// deliberately streams pre-aggregated stats instead of a figure per event —
+// see api/main.py's get_trend docstring. This logic used to have a Python
+// twin in core.charts.build_price_trend_chart; that was removed once the
+// Streamlit UI was retired and this became the only renderer. Kept as
+// loosely-typed plain objects rather than fighting Plotly's (quite
+// restrictive) generated trace/shape/annotation unions for an exact match;
+// Plotly.js accepts this shape at runtime regardless of how strictly TS
+// would type it.
 export function buildPriceTrendChartFigure(
   trend: TrendStat[],
   centerDate: string,

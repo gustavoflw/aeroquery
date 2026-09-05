@@ -1,7 +1,6 @@
 """Airport/location lookups and metro-area handling.
 
-No framework dependency — safe to import from Streamlit, a future API
-service, or tests.
+No framework dependency — safe to import from the API service or tests.
 """
 
 import functools
@@ -74,10 +73,6 @@ def load_airports() -> dict:
     return airportsdata.load("IATA")
 
 
-def location_codes(airports: dict) -> list[str]:
-    return sorted(set(airports) | set(METRO_AREAS))
-
-
 def format_location(code: str, airports: dict) -> str:
     if code in METRO_AREAS:
         city, country = METRO_AREAS[code]
@@ -91,5 +86,5 @@ def format_location(code: str, airports: dict) -> str:
 def all_airport_codes(airports: dict) -> list[str]:
     """Stable ordering shared between the all-airports map trace and the
     click handler that maps a clicked point index back to an airport code
-    (see core.charts.build_route_map / app.render_route_map)."""
+    (see core.charts.build_route_map and web/src/RouteMap.tsx)."""
     return sorted(airports)

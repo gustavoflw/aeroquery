@@ -1,22 +1,28 @@
-"""FastAPI backend wrapping core.* — runs alongside the existing Streamlit
-app on its own port (see .claude/js-migration-plan.md, Phase 1). Nothing
-here is wired into the Streamlit UI yet; it exists to prove core.* works as
-a real HTTP service ahead of a JS frontend actually calling it.
+"""FastAPI backend wrapping core.* — the whole app since the Streamlit
+frontend was retired (see .claude/js-migration-plan.md, Phase 7). Serves the
+JSON API under /api/* and, when web/dist exists, the built React frontend at
+/ so one process runs everything.
 
-Run with: uv run uvicorn api.main:app --reload --port 8000
+Run with: uv run uvicorn api.main:app --port 8000
+(add --reload for development; run `npm run build` in web/ to serve the UI,
+or use the Vite dev server for a live-reloading frontend.)
 """
 
 import asyncio
 import json
+import logging
 import queue
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from core.airports import METRO_AREAS, METRO_MEMBERS, load_airports
 from core.charts import MAP_STYLE, NEON_BG, build_route_map, find_plottable_routes
 from core.config import CURRENCY_CODES, DEFAULT_CURRENCY, MAX_STOPS_OPTIONS
 from core.flights import (
+    PRICE_TREND_TOTAL_DAYS,
     cheapest_direct_flight,
     fetch_price_trend,
     price_trend_stats,
@@ -78,8 +84,11 @@ def get_config():
     prices client-side, the max-stops filter options, and the color theme
     (map_style/neon_bg) so a client-built chart — see /api/trend, whose
     price-trend chart is built in JS rather than sent as figure JSON —
-    matches build_route_map's colors exactly. Static for the life of the
-    process — fetch once, same as /api/airports."""
+    matches build_route_map's colors exactly. Also the price-trend window
+    width (price_trend_days, from $AEROQUERY_PRICE_TREND_DAYS; 1 means the
+    sweep is off and /api/trend just returns the searched date) so the chart
+    header and fixed x-axis range match what the backend actually streams.
+    Static for the life of the process — fetch once, same as /api/airports."""
     return {
         "currencies": CURRENCY_CODES,
         "default_currency": DEFAULT_CURRENCY,
@@ -87,6 +96,7 @@ def get_config():
         "max_stops_options": MAX_STOPS_OPTIONS,
         "map_style": MAP_STYLE,
         "neon_bg": NEON_BG,
+        "price_trend_days": PRICE_TREND_TOTAL_DAYS,
     }
 
 
@@ -132,20 +142,19 @@ async def get_trend(
     max_stops: int | None = None,
     currency: str = "EUR",
 ):
-    """Server-Sent Events stream of the same progressive sweep app.py's
-    stream_update/stream_progress render into Streamlit placeholders — here
-    each on_update/on_progress firing becomes one `data: {...}` event
-    instead. fetch_price_trend itself is synchronous (it runs its own
-    thread pool internally), so it's offloaded to FastAPI's default
-    executor and its callbacks relay through a plain thread-safe Queue into
-    this async generator.
+    """Server-Sent Events stream of the progressive price-trend sweep — each
+    fetch_price_trend on_update/on_progress firing becomes one `data: {...}`
+    event. fetch_price_trend itself is synchronous (it runs its own thread
+    pool internally), so it's offloaded to FastAPI's default executor and
+    its callbacks relay through a plain thread-safe Queue into this async
+    generator.
 
     The stream ends with an explicit {"type": "done"} event rather than
     just closing the connection — plain EventSource treats a closed
     connection as "reconnect", not "finished", so without a terminal event
     a client has no reliable signal to call .close() on before the browser
     tries to reopen it (which would silently kick off a second, redundant
-    180-day sweep).
+    sweep).
     """
 
     async def event_stream():
@@ -201,4 +210,20 @@ async def get_trend(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+# Serve the built React frontend (web/dist) as the app itself, mounted last
+# so the /api/* routes above keep precedence. html=True makes "/" resolve to
+# index.html; the app has no client-side routing (state lives in query
+# params on "/"), so that's the whole SPA-serving story. The mount only
+# activates once `npm run build` has produced web/dist — without it the
+# process still boots and serves the API alone, which is the shape the Vite
+# dev server (npm run dev, proxying /api to :8000) expects during local dev.
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+else:
+    logging.getLogger("uvicorn.error").warning(
+        "web/dist not found — serving /api only. Run `npm run build` in web/ to serve the UI."
     )

@@ -1,8 +1,40 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Plot from 'react-plotly.js'
 import type * as Plotly from 'plotly.js'
 import { formatLocation } from './format'
 import type { AirportInfo, MetroArea, SearchResponse } from './types'
+
+function readViewport(): number {
+  return typeof window === 'undefined' ? 1280 : window.innerWidth
+}
+
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(readViewport)
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return width
+}
+
+// Width of the map's own box, matching App.css: `main` is
+// `max-width: 2200px` with `padding: 0 clamp(1rem, 3vw, 3rem)`, and the map
+// spans it fully.
+function mapBoxWidth(viewportWidth: number): number {
+  const pad = Math.min(48, Math.max(16, viewportWidth * 0.03))
+  return Math.min(2200, viewportWidth) - 2 * pad
+}
+
+// Below 40rem the itinerary list drops to a plain stack (App.css media
+// query) and the map gets its full width; above it the list floats over the
+// map's left edge, so shift the geo subplot right to clear it. The shift
+// tracks the panel's actual fraction of the box (.itinerary-list is 440px +
+// a ~24px gutter), capped so the map never loses more than 40%.
+function geoDomainStart(viewportWidth: number): number {
+  if (viewportWidth < 640) return 0
+  return Math.min(0.4, 464 / mapBoxWidth(viewportWidth))
+}
 
 interface RouteMapProps {
   mapFigure: SearchResponse['map_figure']
@@ -94,11 +126,23 @@ export function RouteMap({
   onToggleHighlight,
   onAirportClick,
 }: RouteMapProps) {
+  const viewportWidth = useViewportWidth()
   const allAirportsTrace = useMemo(
     () => buildAllAirportsTrace(airports, metroAreas),
     [airports, metroAreas],
   )
   const allAirportsCurve = mapFigure.data.length
+
+  // Pull the geo subplot into the portion of the box the floating itinerary
+  // list doesn't cover, so the drawn map isn't half-hidden behind the panel
+  // and uses what would otherwise be dead letterbox margin.
+  const layout = useMemo((): Partial<Plotly.Layout> => {
+    const base = { ...mapFigure.layout, autosize: true }
+    const domainStart = geoDomainStart(viewportWidth)
+    if (domainStart === 0) return base
+    const geo = (base as { geo?: Record<string, unknown> }).geo ?? {}
+    return { ...base, geo: { ...geo, domain: { x: [domainStart, 1], y: [0, 1] } } }
+  }, [mapFigure.layout, viewportWidth])
 
   const data = useMemo(
     () => [
@@ -126,7 +170,7 @@ export function RouteMap({
   return (
     <Plot
       data={data}
-      layout={{ ...mapFigure.layout, autosize: true }}
+      layout={layout}
       style={{ width: '100%', height: '600px' }}
       useResizeHandler
       config={{ displaylogo: false }}

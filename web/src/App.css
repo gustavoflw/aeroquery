@@ -1,8 +1,22 @@
 main {
-  max-width: 64rem;
-  margin: 3rem auto;
-  padding: 0 1.5rem;
+  max-width: 2200px;
+  margin: 2.5rem auto;
+  padding: 0 clamp(1rem, 3vw, 3rem);
   font-family: system-ui, sans-serif;
+}
+
+/* Shared container for every top-level block on the page — see the token
+   comment in index.css. Anything section-level (the search form, the price
+   trend, future panels) gets class="panel" and inherits this look; it fills
+   the full width of `main`. */
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border-color);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: var(--panel-blur);
+  padding: var(--panel-pad);
+  margin-bottom: var(--section-gap);
 }
 
 main.status {
@@ -26,22 +40,12 @@ h1 {
   color: #ff6b6b;
 }
 
-/* Search form: a glass panel wrapping the whole form, glowing cyan/magenta
-   border — matches app.py's .st-key-search_panel treatment. */
+/* Search form: layout only — the glass-panel look comes from .panel. */
 
 .search-form {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  margin-bottom: 2rem;
-  background: rgba(18, 10, 36, 0.55);
-  border: 1px solid rgba(0, 240, 255, 0.3);
-  border-radius: 16px;
-  box-shadow:
-    0 0 24px rgba(0, 240, 255, 0.12),
-    0 0 60px rgba(255, 43, 214, 0.08);
-  backdrop-filter: blur(10px);
-  padding: 1.5rem;
 }
 
 .search-row {
@@ -53,6 +57,12 @@ h1 {
 .search-row > * {
   flex: 1;
   min-width: 12rem;
+}
+
+/* Origin/destination (first row) fill the panel width; date / max stops /
+   currency (any later row) stay at a readable size instead of stretching. */
+.search-row ~ .search-row > * {
+  flex: 0 1 18rem;
 }
 
 .field {
@@ -160,79 +170,219 @@ h1 {
   font-size: 0.9rem;
 }
 
-.itinerary-card {
-  background: rgba(18, 10, 36, 0.55);
-  border: 1px solid;
-  border-left-width: 4px;
-  border-radius: 12px;
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.75rem;
-  box-shadow: 0 0 14px -6px var(--card-glow, transparent);
+/* Itinerary list as a floating panel over the route map — see the comment
+   in App.tsx. background/border-color come from config.map_style
+   (panel_bg / panel_border) so they track the Python-side MAP_STYLE. */
+
+/* .map-with-list has no in-flow content but the plot itself, so its box is
+   exactly the map's height — which is what the floating panel below is
+   pinned to. The section gap that used to live on the plot moves here so it
+   isn't counted into that height. */
+.map-with-list {
+  position: relative;
+  margin-bottom: var(--section-gap);
 }
 
-.itinerary-header {
+/* Height is derived from the map, not guessed: `.map-with-list`'s box is
+   exactly the map's height, so `max-height: calc(100% - ...)` caps the
+   panel relative to it. The subtracted amount is the 12px top inset plus
+   the ~56px strip the Plotly legend occupies along the map's bottom edge,
+   so the panel never covers those labels. The panel shrinks to its content
+   when there are few results; when there are many, the inner scroll area
+   (flex: 1) takes the slack. */
+.itinerary-list {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.4rem;
+  flex-direction: column;
+  width: 440px;
+  max-width: 40%;
+  max-height: calc(100% - 68px);
+  padding: 12px 14px;
+  border: 1px solid;
+  border-radius: 12px;
+  backdrop-filter: blur(6px);
+  box-shadow:
+    0 0 26px rgba(0, 240, 255, 0.1),
+    0 0 60px rgba(255, 43, 214, 0.06);
 }
 
-.itinerary-airlines {
+.itinerary-list-title {
+  flex: none;
+  margin: 0 0 0.5rem;
   font-weight: 600;
   color: #f5f3ff;
 }
 
-.itinerary-stops {
-  font-weight: 600;
-  font-size: 0.85rem;
+.itinerary-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 240, 255, 0.35) transparent;
 }
 
-.itinerary-legs {
-  border-collapse: collapse;
+.itinerary-list-scroll .itinerary-card:last-child {
+  margin-bottom: 0;
+}
+
+/* On narrow screens the overlay would crush both itself and the map — drop
+   back to a plain stacked list under the map there. */
+@media (max-width: 40rem) {
+  .itinerary-list {
+    position: static;
+    display: block;
+    width: auto;
+    max-width: none;
+    max-height: none;
+    margin-top: 1rem;
+    padding: 0;
+    border: none;
+    backdrop-filter: none;
+    box-shadow: none;
+    background: transparent !important;
+  }
+
+  .itinerary-list-scroll {
+    overflow: visible;
+  }
+}
+
+/* One shared table for the whole list. Header row is sticky to the top of
+   the scroll area so the Price / Company / Schedule labels stay visible.
+   Each itinerary is a <tbody>: the Price and Company cells rowspan it, the
+   Schedule column carries a row per leg, a layover row between consecutive
+   legs, and a closing total row. */
+
+.itinerary-table {
   width: 100%;
-  font-size: 0.85rem;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.8rem;
   color: #e7e6f5;
 }
 
-.itinerary-legs td {
-  padding: 2px 8px 2px 0;
+.itinerary-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 8px 6px;
+  background: rgba(20, 11, 34, 0.97);
+  text-align: left;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #a79fd1;
+  border-bottom: 1px solid var(--panel-border-color);
+}
+
+.itinerary-table thead .col-price {
+  width: 4.2rem;
+}
+
+.itinerary-table thead .col-company {
+  width: 6.75rem;
+}
+
+.itinerary-table tbody.itinerary td {
+  padding: 3px 8px;
+  vertical-align: top;
+}
+
+.itinerary-table tbody.itinerary tr:first-child td {
+  padding-top: 9px;
+}
+
+.itinerary-table tbody.itinerary tr:last-child td {
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(0, 240, 255, 0.14);
+}
+
+.itinerary-table tbody.itinerary:last-child tr:last-child td {
+  border-bottom: none;
+}
+
+.col-price {
+  border-left: 3px solid var(--card-glow, transparent);
+}
+
+.col-price .price {
+  display: block;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #f5f3ff;
+}
+
+.col-price .stops {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.col-company {
+  white-space: normal;
+  overflow-wrap: break-word;
+  color: #d9d5f0;
+}
+
+.col-schedule {
+  overflow-wrap: break-word;
+}
+
+.col-schedule .leg-line {
+  display: block;
   white-space: nowrap;
 }
 
-.itinerary-legs .arrow {
+.col-schedule .leg-line b {
+  color: #f5f3ff;
+}
+
+.col-schedule .arrow {
   opacity: 0.5;
-  padding: 2px 6px;
 }
 
-.itinerary-legs .leg-meta {
+.col-schedule .leg-meta {
+  display: block;
+  font-size: 0.7rem;
   opacity: 0.6;
-  font-size: 0.78rem;
-  white-space: normal;
 }
 
-.itinerary-legs .layover-row td {
-  padding: 2px 0 6px;
-  text-align: center;
-  font-size: 0.78rem;
+.col-schedule .layover {
+  display: block;
+  font-size: 0.7rem;
   color: #ffcc4d;
-  white-space: normal;
 }
 
-.itinerary-legs .total-row td {
-  border-top: 1px solid rgba(231, 230, 245, 0.25);
-  padding-top: 4px;
-  font-weight: 600;
-  font-size: 0.8rem;
-  opacity: 0.85;
+.sched-total .col-schedule {
+  border-top: 1px solid rgba(231, 230, 245, 0.22);
+  padding-top: 5px;
+}
+
+.col-schedule .total {
+  font-weight: 700;
+  color: #f5f3ff;
+}
+
+.col-schedule .total-label {
+  margin-right: 5px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a79fd1;
 }
 
 /* Route map */
 
-.results > .js-plotly-plot {
-  margin-bottom: 1.5rem;
-  border: 1px solid rgba(0, 240, 255, 0.35);
-  border-radius: 12px;
-  box-shadow: 0 0 26px rgba(0, 240, 255, 0.1);
+.map-with-list > .js-plotly-plot {
+  border: 1px solid var(--panel-border-color);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
   overflow: hidden;
 }
 
@@ -242,7 +392,7 @@ h1 {
   position: fixed;
   z-index: 100;
   background: #140a24;
-  border: 1px solid rgba(0, 240, 255, 0.35);
+  border: 1px solid var(--panel-border-color);
   border-radius: 10px;
   box-shadow:
     0 0 26px rgba(0, 240, 255, 0.15),
@@ -291,14 +441,11 @@ h1 {
   color: #f5f3ff;
 }
 
-/* Price trend chart */
-
-.price-trend {
-  margin-bottom: 1.5rem;
-}
+/* Price trend chart — container look comes from .panel. */
 
 .price-trend h2 {
   font-size: 1.1rem;
+  margin-top: 0;
   margin-bottom: 0.25rem;
   color: #f5f3ff;
 }
@@ -306,7 +453,7 @@ h1 {
 .trend-caption {
   color: #a79fd1;
   font-size: 0.8rem;
-  margin-top: 0.25rem;
+  margin: 0.25rem 0 0;
 }
 
 /* Progress bar */

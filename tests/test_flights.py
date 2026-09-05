@@ -20,14 +20,25 @@ def test_flight_identity_differs_on_price():
     assert flights.flight_identity(a) != flights.flight_identity(b)
 
 
-def test_price_trend_window_is_centered_when_far_in_the_future():
+def test_price_trend_window_is_a_single_day_by_default():
+    # $AEROQUERY_PRICE_TREND_DAYS unset -> PRICE_TREND_TOTAL_DAYS == 1, so
+    # the "window" is just the searched date itself.
+    center = dt.date.today() + dt.timedelta(days=365)
+    start, end = flights.price_trend_window(center.isoformat())
+    assert start == center
+    assert end == center
+
+
+def test_price_trend_window_is_centered_when_far_in_the_future(monkeypatch):
+    monkeypatch.setattr(flights, "PRICE_TREND_TOTAL_DAYS", 181)
     center = dt.date.today() + dt.timedelta(days=365)
     start, end = flights.price_trend_window(center.isoformat())
     assert start == center - dt.timedelta(days=90)
     assert end == start + dt.timedelta(days=180)
 
 
-def test_price_trend_window_clamps_to_today_near_now():
+def test_price_trend_window_clamps_to_today_near_now(monkeypatch):
+    monkeypatch.setattr(flights, "PRICE_TREND_TOTAL_DAYS", 181)
     center = dt.date.today() + dt.timedelta(days=1)
     start, end = flights.price_trend_window(center.isoformat())
     assert start == dt.date.today()
@@ -116,7 +127,25 @@ def test_search_flights_merges_missing_nonstop_fare(monkeypatch):
     assert prices == [33, 123]
 
 
+def test_fetch_price_trend_is_a_single_search_by_default(monkeypatch):
+    # Default PRICE_TREND_TOTAL_DAYS == 1: no sweep, just the searched date.
+    center_iso = (dt.date.today() + dt.timedelta(days=20)).isoformat()
+    searched = []
+
+    def fake_search_flights(origin, destination, date_iso, max_stops, currency):
+        searched.append(date_iso)
+        return [make_flight(price=100, legs=[make_leg()])]
+
+    monkeypatch.setattr(flights, "search_flights", fake_search_flights)
+
+    result = flights.fetch_price_trend("AAA", "BBB", center_iso, None, "EUR")
+
+    assert list(result.keys()) == [center_iso]
+    assert searched == [center_iso]
+
+
 def test_fetch_price_trend_streams_center_date_before_the_rest(monkeypatch):
+    monkeypatch.setattr(flights, "PRICE_TREND_TOTAL_DAYS", 5)
     center_iso = (dt.date.today() + dt.timedelta(days=20)).isoformat()
 
     def fake_search_flights(origin, destination, date_iso, max_stops, currency):
@@ -136,8 +165,8 @@ def test_fetch_price_trend_streams_center_date_before_the_rest(monkeypatch):
         on_progress=lambda completed, total, eta: progresses.append((completed, total, eta)),
     )
 
-    assert len(result) == flights.PRICE_TREND_TOTAL_DAYS + 1
+    assert len(result) == flights.PRICE_TREND_TOTAL_DAYS
     assert list(updates[0].keys()) == [center_iso]
     assert [len(u) for u in updates] == sorted(len(u) for u in updates)
-    assert progresses[0] == (1, flights.PRICE_TREND_TOTAL_DAYS + 1, None)
+    assert progresses[0] == (1, flights.PRICE_TREND_TOTAL_DAYS, None)
     assert progresses[-1][2] is None

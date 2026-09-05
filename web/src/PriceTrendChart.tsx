@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
-import { PRICE_TREND_TOTAL_DAYS, buildPriceTrendChartFigure } from './trendChartMath'
+import { buildPriceTrendChartFigure } from './trendChartMath'
 import type { CheapestDirect, ConfigResponse, TrendStat } from './types'
 
 interface PriceTrendChartProps {
@@ -38,8 +38,10 @@ export function PriceTrendChart({
   const foundDays = trend.filter((r) => r.mean !== null).length
 
   return (
-    <div className="price-trend">
-      <h2>📈 Price trend — {PRICE_TREND_TOTAL_DAYS} days</h2>
+    <div className="panel price-trend">
+      <h2>
+        📈 Price trend — {config.price_trend_days} {config.price_trend_days === 1 ? 'day' : 'days'}
+      </h2>
       <Plot
         data={figure.data}
         layout={{ ...figure.layout, autosize: true }}

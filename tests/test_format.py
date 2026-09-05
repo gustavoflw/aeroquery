@@ -2,12 +2,10 @@ import datetime as dt
 
 from core.format import (
     format_duration,
-    format_eta,
     format_price,
     route_layovers,
     route_summary,
     route_total_duration,
-    stops_color,
     stops_label,
 )
 from tests.conftest import make_flight, make_leg
@@ -27,29 +25,10 @@ def test_format_duration():
     assert format_duration(dt.timedelta(minutes=45)) == "0h 45m"
 
 
-def test_format_eta_under_a_minute():
-    assert format_eta(42) == "42s"
-
-
-def test_format_eta_over_a_minute():
-    assert format_eta(125) == "2m 05s"
-
-
-def test_format_eta_never_negative():
-    assert format_eta(-5) == "0s"
-
-
 def test_stops_label():
     assert stops_label(0) == "Direct"
     assert stops_label(1) == "1 stop"
     assert stops_label(2) == "2 stops"
-
-
-def test_stops_color_maps_to_style_dict():
-    style = dict(stop_ok="green", stop_warn="amber", stop_bad="red")
-    assert stops_color(0, style) == "green"
-    assert stops_color(1, style) == "amber"
-    assert stops_color(2, style) == "red"
 
 
 def test_route_layovers_and_total_duration_for_a_connection():

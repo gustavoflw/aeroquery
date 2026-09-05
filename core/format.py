@@ -1,7 +1,6 @@
 """Pure formatting and per-flight derivation helpers.
 
-No framework dependency — safe to import from Streamlit, a future API
-service, or tests.
+No framework dependency — safe to import from the API service or tests.
 """
 
 import datetime as dt
@@ -27,11 +26,6 @@ def format_duration(td: dt.timedelta) -> str:
     return f"{hours}h {minutes:02d}m"
 
 
-def format_eta(seconds: float) -> str:
-    minutes, seconds = divmod(max(0, round(seconds)), 60)
-    return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
-
-
 def format_price(price: int, currency: str) -> str:
     symbol = CURRENCY_SYMBOLS.get(currency)
     return f"{symbol}{price}" if symbol else f"{price} {currency}"
@@ -55,14 +49,6 @@ def route_total_duration(flight) -> dt.timedelta:
 
 def stops_label(stops: int) -> str:
     return "Direct" if stops == 0 else f"{stops} stop{'s' if stops != 1 else ''}"
-
-
-def stops_color(stops: int, style: dict) -> str:
-    if stops == 0:
-        return style["stop_ok"]
-    if stops == 1:
-        return style["stop_warn"]
-    return style["stop_bad"]
 
 
 def route_summary(flight, currency: str) -> str:

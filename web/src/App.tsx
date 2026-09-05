@@ -127,23 +127,29 @@ function App() {
       .finally(() => setIsSearching(false))
 
     closeTrendStreamRef.current?.()
+    closeTrendStreamRef.current = null
     setTrendCenterDate(params.date)
     setTrendStats([])
     setCheapestDirect(null)
     setTrendProgress(null)
     setTrendError(null)
-    closeTrendStreamRef.current = streamTrend(params, {
-      onProgress: (completed, total, etaSeconds) => setTrendProgress({ completed, total, etaSeconds }),
-      onTrend: (stats, direct) => {
-        setTrendStats(stats)
-        setCheapestDirect(direct)
-      },
-      onDone: () => setTrendProgress(null),
-      onError: (message) => {
-        setTrendError(message)
-        setTrendProgress(null)
-      },
-    })
+    // A one-day "sweep" is just the searched date over again — skip the
+    // stream and the chart entirely (see the render gate below).
+    if (cfg.price_trend_days > 1) {
+      closeTrendStreamRef.current = streamTrend(params, {
+        onProgress: (completed, total, etaSeconds) =>
+          setTrendProgress({ completed, total, etaSeconds }),
+        onTrend: (stats, direct) => {
+          setTrendStats(stats)
+          setCheapestDirect(direct)
+        },
+        onDone: () => setTrendProgress(null),
+        onError: (message) => {
+          setTrendError(message)
+          setTrendProgress(null)
+        },
+      })
+    }
   }
 
   function handleFormStateChange(patch: Partial<FormState>) {
@@ -207,50 +213,89 @@ function App() {
       />
       {searchError && <p className="error">Search failed: {searchError}</p>}
 
-      {trendProgress && (
-        <ProgressBar
-          completed={trendProgress.completed}
-          total={trendProgress.total}
-          etaSeconds={trendProgress.etaSeconds}
-        />
-      )}
-      {trendError && <p className="error">{trendError}</p>}
-      {trendCenterDate && trendStats.length > 0 && (
-        <PriceTrendChart
-          trend={trendStats}
-          centerDate={trendCenterDate}
-          currency={formState.currency}
-          config={config}
-          cheapestDirect={cheapestDirect}
-          xRange={priceTrendWindow(trendCenterDate)}
-        />
-      )}
-
       {results && (
         <section className="results">
           <p className="results-summary">
             {results.results.length} itinerar{results.results.length === 1 ? 'y' : 'ies'} found for{' '}
             {results.date} · click any airport on the map to pick a new origin or destination
           </p>
-          <RouteMap
-            mapFigure={results.map_figure}
-            routeResultIndices={results.route_result_indices}
-            airports={airportsData.airports}
-            metroAreas={airportsData.metro_areas}
-            highlightedIndices={highlightedIndices}
-            onToggleHighlight={handleToggleHighlight}
-            onAirportClick={handleAirportClick}
-          />
-          {results.results.map((flight, index) => (
-            <ItineraryCard
-              key={index}
-              flight={flight}
-              currency={results.currency}
-              currencySymbols={config.currency_symbols}
+          {/* The itinerary list floats over the map's top-left as a
+              translucent scrollable panel — mirrors app.py's old
+              render_results layout (its .list_panel overlaid .map_overlay),
+              so results sit on the map instead of a full screen below it.
+              build_route_map centers its content, so the covered strip
+              rarely has routes worth seeing. */}
+          <div className="map-with-list">
+            <RouteMap
+              mapFigure={results.map_figure}
+              routeResultIndices={results.route_result_indices}
+              airports={airportsData.airports}
+              metroAreas={airportsData.metro_areas}
+              highlightedIndices={highlightedIndices}
+              onToggleHighlight={handleToggleHighlight}
+              onAirportClick={handleAirportClick}
             />
-          ))}
+            <div
+              className="itinerary-list"
+              style={{
+                background: config.map_style.panel_bg,
+                borderColor: config.map_style.panel_border,
+              }}
+            >
+              <p className="itinerary-list-title">All itineraries</p>
+              {/* The scroll lives on this inner element, NOT on
+                  .itinerary-list — Chromium leaves ghost repaint tiles when
+                  a backdrop-filter element is itself scrolled. */}
+              <div className="itinerary-list-scroll">
+                <table className="itinerary-table">
+                  <thead>
+                    <tr>
+                      <th className="col-price">Price</th>
+                      <th className="col-company">Company</th>
+                      <th className="col-schedule">Schedule</th>
+                    </tr>
+                  </thead>
+                  {results.results.map((flight, index) => (
+                    <ItineraryCard
+                      key={index}
+                      flight={flight}
+                      currency={results.currency}
+                      currencySymbols={config.currency_symbols}
+                    />
+                  ))}
+                </table>
+              </div>
+            </div>
+          </div>
         </section>
       )}
+
+      {/* Price trend goes last, and only when the sweep is more than the
+          searched day itself (AEROQUERY_PRICE_TREND_DAYS on the backend;
+          exposed as config.price_trend_days). */}
+      {config.price_trend_days > 1 && (
+        <>
+          {trendProgress && (
+            <ProgressBar
+              completed={trendProgress.completed}
+              total={trendProgress.total}
+              etaSeconds={trendProgress.etaSeconds}
+            />
+          )}
+          {trendError && <p className="error">{trendError}</p>}
+          {trendCenterDate && trendStats.length > 0 && (
+            <PriceTrendChart
+              trend={trendStats}
+              centerDate={trendCenterDate}
+              currency={formState.currency}
+              config={config}
+              cheapestDirect={cheapestDirect}
+              xRange={priceTrendWindow(trendCenterDate, config.price_trend_days)}
+            />
+          )}
+        </>
+      )}
+
       {airportPicker && (
         <AirportPickerPopover
           code={airportPicker.code}

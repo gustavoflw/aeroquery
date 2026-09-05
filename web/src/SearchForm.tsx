@@ -29,7 +29,7 @@ export function SearchForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="search-form">
+    <form onSubmit={handleSubmit} className="panel search-form">
       <div className="search-row">
         <LocationInput
           id="origin"

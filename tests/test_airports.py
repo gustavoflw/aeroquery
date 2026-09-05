@@ -4,7 +4,6 @@ from core.airports import (
     all_airport_codes,
     format_location,
     load_airports,
-    location_codes,
 )
 
 
@@ -16,14 +15,6 @@ def test_load_airports_returns_real_airport_data():
     airports = load_airports()
     assert len(airports) > 1000
     assert airports["CDG"]["city"] == "Paris"
-
-
-def test_location_codes_includes_both_real_and_metro_codes():
-    airports = load_airports()
-    codes = location_codes(airports)
-    assert "CDG" in codes
-    assert "STO" in codes  # metro code, not a real IATA airport
-    assert codes == sorted(codes)
 
 
 def test_metro_areas_and_members_are_consistent():

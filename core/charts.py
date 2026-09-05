@@ -1,13 +1,15 @@
-"""Plotly figure builders for the route map and price-trend chart.
+"""Plotly figure builders for the route map.
 
 No framework dependency — these build plain go.Figure objects (which are
-just JSON), so a future JS frontend can render the exact same figures via
-Plotly.js without porting any of this logic. The only "framework" input
-either function takes is a plain `style: dict` of color values, supplied by
-the caller.
+just JSON), so the JS frontend renders the exact same figure via Plotly.js
+without porting any of this logic. The only "framework" input build_route_map
+takes is a plain `style: dict` of color values, supplied by the caller.
+
+(The price-trend chart is built client-side instead — see
+web/src/trendChartMath.ts — since /api/trend streams pre-aggregated stats
+rather than a figure per event.)
 """
 
-import datetime as dt
 import math
 
 import plotly.graph_objects as go
@@ -22,14 +24,15 @@ from core.format import format_price, route_summary, stops_label
 # chroma floor, and contrast all pass; worst adjacent CVD ΔE 11.6, worst
 # adjacent normal-vision ΔE 16.6 (both clear the 8/15 targets). Used directly
 # here (rather than threaded through `style`) since it's specifically the
-# dark backdrop these two chart functions draw markers/annotations against,
-# not a themable color like the ones in `style`.
+# dark backdrop build_route_map draws markers/annotations against, not a
+# themable color like the ones in `style`. Also sent over /api/config so the
+# client-built trend chart draws against the same backdrop.
 NEON_BG = "#0a0118"
 
-# The canonical default style dict both build_route_map and
-# build_price_trend_chart take as `style` — lives here (rather than in
-# app.py or api/) so both the Streamlit UI and the API build figures against
-# the exact same theme instead of risking two copies drifting apart.
+# The canonical style dict build_route_map takes as `style` — lives here
+# (rather than in api/) so the map figure and the /api/config colors the
+# frontend rebuilds its trend chart from stay in lockstep instead of risking
+# two copies drifting apart.
 MAP_STYLE = dict(
     route_colors=[
         "#0095ff",  # blue
@@ -105,13 +108,6 @@ def find_plottable_routes(
             continue
         plottable.append((idx, flight, codes, coords))
     return plottable, skipped
-
-
-def route_colors_by_index(plottable, style: dict) -> dict[int, str]:
-    """Map each plottable route's result-list index to its map line color,
-    so the itinerary cards can show a matching swatch."""
-    route_colors = style["route_colors"]
-    return {idx: route_colors[i % len(route_colors)] for i, (idx, *_rest) in enumerate(plottable)}
 
 
 def build_route_map(
@@ -280,9 +276,23 @@ def build_route_map(
         lon_pad = max(lon_span * 0.25, 8.0)
         lat_lo = max(min(all_lats) - lat_pad, -85)
         lat_hi = min(max(all_lats) + lat_pad, 85)
+        lon_lo = min(all_lons) - lon_pad
+        lon_hi = max(all_lons) + lon_pad
+        # The map renders in a landscape box (~600px tall, far wider), but a
+        # mostly north-south route (e.g. Lisbon→São Paulo) has a lon span far
+        # smaller than its lat span — Plotly then fits that tall-narrow
+        # window into the box and letterboxes it into a thin central strip.
+        # Widen the lon range toward the box's own aspect so the content
+        # actually fills the width; the route just sits in more surrounding
+        # ocean, which reads as intentional rather than broken.
+        min_lon_range = (lat_hi - lat_lo) * 1.6
+        if (lon_hi - lon_lo) < min_lon_range:
+            mid = (lon_lo + lon_hi) / 2
+            lon_lo = max(mid - min_lon_range / 2, -180)
+            lon_hi = min(mid + min_lon_range / 2, 180)
         geo_range = dict(
             lataxis=dict(range=[lat_lo, lat_hi]),
-            lonaxis=dict(range=[min(all_lons) - lon_pad, max(all_lons) + lon_pad]),
+            lonaxis=dict(range=[lon_lo, lon_hi]),
         )
     fig.update_geos(
         projection_type="natural earth",
@@ -314,292 +324,5 @@ def build_route_map(
         ),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-    )
-    return fig
-
-
-def nice_log_ticks(lo: float, hi: float) -> list[float]:
-    """Round 1-2-5-per-decade values spanning [lo, hi] (e.g. 200, 300, 500,
-    1000, 2000) — Plotly's own log-axis minor ticks label as bare digits
-    ("7", "6", "5"...) with no indication of scale, which reads as noise
-    without the surrounding decade context."""
-    if lo <= 0 or hi <= 0 or lo > hi:
-        return []
-    start_pow = math.floor(math.log10(lo))
-    end_pow = math.ceil(math.log10(hi))
-    ticks = {
-        m * 10**p
-        for p in range(start_pow, end_pow + 1)
-        for m in (1, 2, 5)
-        if lo * 0.9 <= m * 10**p <= hi * 1.1
-    }
-    return sorted(ticks)
-
-
-def build_price_trend_chart(
-    trend: list[dict],
-    center_date: dt.date,
-    currency: str,
-    style: dict,
-    direct: dict | None = None,
-    x_range: tuple[dt.date, dt.date] | None = None,
-) -> go.Figure:
-    """Average price per day across the search window, with each day's
-    actual lowest/highest observed fare drawn as vertical bars extending
-    up/down from the average.
-
-    x_range, if given, pins the x-axis to that (start, end) span regardless
-    of which days in it actually have data yet — used while the trend is
-    still streaming in so the axis stays put and days visibly fill in
-    against a fixed width, instead of the axis growing on every redraw."""
-    dates = [row["date"] for row in trend]
-    means = [row["mean"] for row in trend]
-    mins = [row["min"] for row in trend]
-    maxes = [row["max"] for row in trend]
-    all_prices = [v for v in (*means, *mins, *maxes) if v is not None]
-    # error_y needs numeric magnitudes, not None, for days with no fares —
-    # 0 draws a zero-length (invisible) bar, matching how means/mins/maxes
-    # are already None for those days.
-    max_reach = [
-        (mx - m) if (m is not None and mx is not None) else 0
-        for m, mx in zip(means, maxes, strict=True)
-    ]
-    min_reach = [
-        (m - mn) if (m is not None and mn is not None) else 0
-        for m, mn in zip(means, mins, strict=True)
-    ]
-    zeros = [0] * len(dates)
-
-    avg_color = style["route_colors"][0]
-    # Cheap→pricey color scale reusing the app's existing status hues (the
-    # same green/amber/red already used for stop counts), so the Average
-    # line's markers double as a heatmap and the lowest day pops out without
-    # having to read the axis.
-    known_means = [m for m in means if m is not None]
-    price_scale = [[0.0, style["stop_ok"]], [0.5, style["stop_warn"]], [1.0, style["stop_bad"]]]
-    # marker.color can't mix None with numbers the way y can (None there just
-    # opens a gap) — days with no fares get a 0 placeholder that's never
-    # actually drawn, since their y is None too.
-    marker_colors = [m if m is not None else 0 for m in means]
-
-    fig = go.Figure()
-    # Highest/lowest fare drawn as vertical bars reaching up/down from the
-    # average, rather than lines of their own — two invisible-marker traces
-    # anchored at the average price, each carrying a one-directional error
-    # bar (Plotly can't color a single error_y's plus/minus sides
-    # differently, hence two traces). Colored green/red to match the
-    # cheap→pricey scale used elsewhere on this chart (the Average markers,
-    # the cheapest callout).
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=means,
-            mode="markers",
-            # size=0 hides the marker on the chart itself (the error bar is
-            # the whole point) while keeping full opacity, so the legend
-            # swatch — which mirrors color/opacity, not marker size — still
-            # renders in this color instead of going invisible too.
-            marker=dict(size=0, color=style["stop_bad"]),
-            error_y=dict(
-                type="data",
-                array=max_reach,
-                arrayminus=zeros,
-                color=style["stop_bad"],
-                thickness=1.25,
-                width=2,
-            ),
-            opacity=0.7,
-            name="Highest fare",
-            customdata=maxes,
-            hovertemplate=f"Highest: %{{customdata:.0f}} {currency}<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=means,
-            mode="markers",
-            marker=dict(size=0, color=style["stop_ok"]),
-            error_y=dict(
-                type="data",
-                array=zeros,
-                arrayminus=min_reach,
-                color=style["stop_ok"],
-                thickness=1.25,
-                width=2,
-            ),
-            opacity=0.7,
-            name="Lowest fare",
-            customdata=mins,
-            hovertemplate=f"Lowest: %{{customdata:.0f}} {currency}<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=means,
-            mode="lines+markers",
-            name="Average price",
-            line=dict(color=avg_color, width=2),
-            marker=dict(
-                size=9,
-                color=marker_colors,
-                colorscale=price_scale,
-                cmin=min(known_means) if known_means else 0,
-                cmax=max(known_means) if known_means else 1,
-                line=dict(width=1, color=NEON_BG),
-            ),
-            hovertemplate=f"Average: %{{y:.0f}} {currency}<extra></extra>",
-        )
-    )
-
-    # These callouts are all real marker traces sitting exactly on the point
-    # they describe (rather than a floating text annotation, which can land
-    # in an unpredictable spot and get lost against 180 days of data), with
-    # their price in the legend and on hover. Same gold "cheapest" color for
-    # all three, but a distinct shape per category so they don't read as one
-    # mark when they land close together.
-    gold = "#ffd700"
-    avg_star = dict(symbol="star", size=16, color=gold, line=dict(width=1, color=NEON_BG))
-    fare_diamond = dict(symbol="diamond", size=13, color=gold, line=dict(width=1, color=NEON_BG))
-    direct_hexagram = dict(
-        symbol="hexagram", size=15, color=gold, line=dict(width=1, color=NEON_BG)
-    )
-    if known_means:
-        cheapest = min((row for row in trend if row["mean"] is not None), key=lambda r: r["mean"])
-        fig.add_trace(
-            go.Scatter(
-                x=[cheapest["date"]],
-                y=[cheapest["mean"]],
-                mode="markers",
-                marker=avg_star,
-                name=f"Cheapest average fare: {format_price(round(cheapest['mean']), currency)}",
-                hovertemplate=(
-                    f"Cheapest average fare: {format_price(round(cheapest['mean']), currency)}"
-                    "<extra></extra>"
-                ),
-            )
-        )
-
-    known_min_rows = [row for row in trend if row["min"] is not None]
-    if known_min_rows:
-        cheapest_fare = min(known_min_rows, key=lambda row: row["min"])
-        fig.add_trace(
-            go.Scatter(
-                x=[cheapest_fare["date"]],
-                y=[cheapest_fare["min"]],
-                mode="markers",
-                marker=fare_diamond,
-                name=f"Cheapest fare: {format_price(round(cheapest_fare['min']), currency)}",
-                hovertemplate=(
-                    f"Cheapest fare: {format_price(round(cheapest_fare['min']), currency)}"
-                    "<extra></extra>"
-                ),
-            )
-        )
-
-    if direct is not None:
-        fig.add_trace(
-            go.Scatter(
-                x=[direct["date"]],
-                y=[direct["price"]],
-                mode="markers",
-                marker=direct_hexagram,
-                name=f"Cheapest direct flight: {format_price(round(direct['price']), currency)}",
-                hovertemplate=(
-                    f"Cheapest direct flight: {format_price(round(direct['price']), currency)}"
-                    "<extra></extra>"
-                ),
-            )
-        )
-
-    # add_vline chokes on date-typed x-axes in some Plotly versions — a shape
-    # anchored to the x axis (yref="paper" spans the full plot height) is the
-    # version-safe way to mark the searched date. A wider, translucent copy
-    # underneath gives it a glow halo, the same technique the route map uses
-    # for its highlighted flight paths — makes it read as "the" reference
-    # point rather than just another gridline.
-    center_iso = center_date.isoformat()
-    search_color = "#00f0ff"
-    fig.add_shape(
-        type="line",
-        xref="x",
-        yref="paper",
-        x0=center_iso,
-        x1=center_iso,
-        y0=0,
-        y1=1,
-        line=dict(color="rgba(0,240,255,0.25)", width=8),
-        layer="below",
-    )
-    fig.add_shape(
-        type="line",
-        xref="x",
-        yref="paper",
-        x0=center_iso,
-        x1=center_iso,
-        y0=0,
-        y1=1,
-        line=dict(color=search_color, width=2),
-    )
-    fig.add_annotation(
-        x=center_iso,
-        y=1,
-        yref="paper",
-        yanchor="bottom",
-        text="<b>Searched date</b>",
-        showarrow=False,
-        font=dict(color=search_color, size=12),
-        bgcolor=NEON_BG,
-        bordercolor=search_color,
-        borderwidth=1,
-        borderpad=4,
-    )
-
-    # Plotly's log-axis autorange miscomputes badly when combined with
-    # error_y bars (observed: a legitimate price range blew up to a
-    # 10^0–10^264 axis) — setting the range explicitly from our own data
-    # sidesteps that entirely. range values for a log axis are log10 of the
-    # displayed bounds, not the bounds themselves.
-    if all_prices:
-        log_range = [math.log10(min(all_prices) * 0.85), math.log10(max(all_prices) * 1.15)]
-        tick_values = nice_log_ticks(min(all_prices), max(all_prices))
-        tick_text = [format_price(round(v), currency) for v in tick_values]
-    else:
-        log_range = None
-        tick_values = tick_text = None
-
-    fig.update_layout(
-        height=340,
-        margin=dict(l=10, r=10, t=30, b=10),
-        hovermode="x unified",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-            font=dict(color=style["legend_font"]),
-            bgcolor="rgba(0,0,0,0)",
-        ),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(
-            showgrid=False,
-            color=style["legend_font"],
-            tickfont=dict(color=style["legend_font"]),
-            range=[x_range[0].isoformat(), x_range[1].isoformat()] if x_range else None,
-        ),
-        yaxis=dict(
-            title=dict(text=f"Price ({currency})", font=dict(color=style["legend_title_font"])),
-            type="log",
-            range=log_range,
-            tickmode="array",
-            tickvals=tick_values,
-            ticktext=tick_text,
-            gridcolor="rgba(255,255,255,0.08)",
-            color=style["legend_font"],
-            tickfont=dict(color=style["legend_font"]),
-        ),
     )
     return fig

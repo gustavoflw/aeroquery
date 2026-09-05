@@ -45,6 +45,10 @@ export interface ConfigResponse {
   max_stops_options: Record<string, number | null>
   map_style: MapStyle
   neon_bg: string
+  // Number of consecutive dates the price-trend sweep covers, from the
+  // backend's $AEROQUERY_PRICE_TREND_DAYS (default 1 — no sweep, just the
+  // searched date). Drives the chart header and its fixed x-axis range.
+  price_trend_days: number
 }
 
 export interface FlightLeg {

@@ -9,7 +9,7 @@ import type { CheapestDirect, SearchParams, TrendEvent, TrendStat } from './type
  * The stream ends with an explicit {"type": "done"} event (see
  * api/main.py's get_trend) — plain EventSource treats a closed connection
  * as "reconnect", so onDone calls source.close() synchronously to pre-empt
- * that before it can fire off a second, redundant 180-day sweep.
+ * that before it can fire off a second, redundant sweep.
  */
 export function streamTrend(
   params: SearchParams,

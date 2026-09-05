@@ -32,6 +32,8 @@ def test_get_config_exposes_currencies_symbols_and_stop_options():
     assert body["max_stops_options"] == {"Any": None, "Nonstop": 0, "1 stop": 1, "2 stops": 2}
     assert len(body["map_style"]["route_colors"]) == 8
     assert body["neon_bg"] == "#0a0118"
+    # $AEROQUERY_PRICE_TREND_DAYS unset in the test env -> sweep off.
+    assert body["price_trend_days"] == 1
 
 
 def test_get_search_returns_sorted_results_and_map_figure_without_all_airports(monkeypatch):
