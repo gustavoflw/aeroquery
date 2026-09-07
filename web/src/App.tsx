@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { AirportPickerPopover } from './AirportPickerPopover'
 import { fetchAirports, fetchConfig, fetchSearch } from './api'
 import { ItineraryCard } from './ItineraryCard'
+import { itineraryColor } from './itineraryColor'
 import { PriceTrendChart } from './PriceTrendChart'
 import { priceTrendWindow } from './trendChartMath'
 import { ProgressBar } from './ProgressBar'
@@ -32,6 +33,18 @@ const INITIAL_FORM_STATE: FormState = {
   date: defaultDate(),
   maxStopsLabel: 'Any',
   currency: 'EUR',
+  trendDaysLabel: 'Off',
+}
+
+function toSearchParams(state: FormState, cfg: ConfigResponse): SearchParams {
+  return {
+    origin: state.origin,
+    destination: state.destination,
+    date: state.date,
+    maxStops: cfg.max_stops_options[state.maxStopsLabel] ?? null,
+    currency: state.currency,
+    trendDays: cfg.trend_days_options[state.trendDaysLabel] ?? 1,
+  }
 }
 
 interface AirportPickerState {
@@ -61,12 +74,19 @@ function App() {
   const [formState, setFormState] = useState<FormState>(INITIAL_FORM_STATE)
   const [results, setResults] = useState<SearchResponse | null>(null)
   const [isSearching, setIsSearching] = useState(false)
+  // A currency change repices the existing results in place rather than
+  // re-running the whole search (see handleCurrencyChange).
+  const [isRepricing, setIsRepricing] = useState(false)
+  const repriceSeq = useRef(0)
   const [searchError, setSearchError] = useState<string | null>(null)
 
   const [highlightedIndices, setHighlightedIndices] = useState<Set<number>>(new Set())
   const [airportPicker, setAirportPicker] = useState<AirportPickerState | null>(null)
 
   const [trendCenterDate, setTrendCenterDate] = useState<string | null>(null)
+  // The trend-window size the current results were fetched with (from the
+  // form's "Price trend" choice at search time); 1 = off.
+  const [searchTrendDays, setSearchTrendDays] = useState(1)
   const [trendStats, setTrendStats] = useState<TrendStat[]>([])
   const [cheapestDirect, setCheapestDirect] = useState<CheapestDirect | null>(null)
   const [trendProgress, setTrendProgress] = useState<TrendProgress | null>(null)
@@ -85,6 +105,10 @@ function App() {
         const merged: FormState = {
           ...INITIAL_FORM_STATE,
           currency: cfg.default_currency,
+          trendDaysLabel:
+            Object.keys(cfg.trend_days_options).find(
+              (label) => cfg.trend_days_options[label] === cfg.default_trend_days,
+            ) ?? INITIAL_FORM_STATE.trendDaysLabel,
           ...readFormStateFromUrl(airports, cfg),
         }
         setFormState(merged)
@@ -109,13 +133,7 @@ function App() {
   // state closure, since the update hasn't committed yet.
   function runSearchWithConfig(state: FormState, cfg: ConfigResponse) {
     writeFormStateToUrl(state)
-    const params: SearchParams = {
-      origin: state.origin,
-      destination: state.destination,
-      date: state.date,
-      maxStops: cfg.max_stops_options[state.maxStopsLabel] ?? null,
-      currency: state.currency,
-    }
+    const params = toSearchParams(state, cfg)
 
     setIsSearching(true)
     setSearchError(null)
@@ -126,16 +144,21 @@ function App() {
       .catch((err) => setSearchError(String(err)))
       .finally(() => setIsSearching(false))
 
+    startTrendStream(params)
+  }
+
+  function startTrendStream(params: SearchParams) {
     closeTrendStreamRef.current?.()
     closeTrendStreamRef.current = null
     setTrendCenterDate(params.date)
+    setSearchTrendDays(params.trendDays)
     setTrendStats([])
     setCheapestDirect(null)
     setTrendProgress(null)
     setTrendError(null)
-    // A one-day "sweep" is just the searched date over again — skip the
-    // stream and the chart entirely (see the render gate below).
-    if (cfg.price_trend_days > 1) {
+    // "Off" (1) is just the searched date over again — skip the stream and
+    // the chart entirely (see the render gate below).
+    if (params.trendDays > 1) {
       closeTrendStreamRef.current = streamTrend(params, {
         onProgress: (completed, total, etaSeconds) =>
           setTrendProgress({ completed, total, etaSeconds }),
@@ -150,6 +173,36 @@ function App() {
         },
       })
     }
+  }
+
+  // Currency is a display setting, not a new search: keep the current
+  // itinerary list, map and highlights on screen and just refetch prices in
+  // the new currency, showing a loading shimmer on the price cells until
+  // they land. (The API still needs the currency — Google Flights returns
+  // the price data already denominated.)
+  function handleCurrencyChange(code: string) {
+    const next = { ...formState, currency: code }
+    setFormState(next)
+    if (!config || !next.origin || !next.destination || !results) return
+
+    const params = toSearchParams(next, config)
+    writeFormStateToUrl(next)
+
+    const seq = ++repriceSeq.current
+    setSearchError(null)
+    setIsRepricing(true)
+    fetchSearch(params)
+      .then((r) => {
+        if (seq === repriceSeq.current) setResults(r)
+      })
+      .catch((err) => {
+        if (seq === repriceSeq.current) setSearchError(String(err))
+      })
+      .finally(() => {
+        if (seq === repriceSeq.current) setIsRepricing(false)
+      })
+
+    startTrendStream(params)
   }
 
   function handleFormStateChange(patch: Partial<FormState>) {
@@ -179,6 +232,14 @@ function App() {
     // search" — picking an airport here immediately searches the new route.
     if (next.origin && next.destination) runSearch(next)
   }
+
+  // One neon colour per itinerary, from its airline(s) — shared by the list
+  // card's border and that itinerary's route on the map (RouteMap indexes it
+  // back through route_result_indices).
+  const itineraryColors = useMemo(
+    () => (results ? results.results.map((f) => itineraryColor(f.airlines)) : []),
+    [results],
+  )
 
   if (loadError) {
     return (
@@ -219,22 +280,10 @@ function App() {
             {results.results.length} itinerar{results.results.length === 1 ? 'y' : 'ies'} found for{' '}
             {results.date} · click any airport on the map to pick a new origin or destination
           </p>
-          {/* The itinerary list floats over the map's top-left as a
-              translucent scrollable panel — mirrors app.py's old
-              render_results layout (its .list_panel overlaid .map_overlay),
-              so results sit on the map instead of a full screen below it.
-              build_route_map centers its content, so the covered strip
-              rarely has routes worth seeing. */}
-          <div className="map-with-list">
-            <RouteMap
-              mapFigure={results.map_figure}
-              routeResultIndices={results.route_result_indices}
-              airports={airportsData.airports}
-              metroAreas={airportsData.metro_areas}
-              highlightedIndices={highlightedIndices}
-              onToggleHighlight={handleToggleHighlight}
-              onAirportClick={handleAirportClick}
-            />
+          {/* Itinerary list and map are separate frames side by side (list
+              left, map right); below 48rem they stack, list on top — see
+              .results-layout in App.css. */}
+          <div className="results-layout">
             <div
               className="itinerary-list"
               style={{
@@ -242,38 +291,65 @@ function App() {
                 borderColor: config.map_style.panel_border,
               }}
             >
-              <p className="itinerary-list-title">All itineraries</p>
+              <div className="itinerary-list-header">
+                <p className="itinerary-list-title">All itineraries</p>
+                {/* Currency isn't a search field — it's a display setting on
+                    the results (default EUR); changing it re-fetches in the
+                    new currency since the price data comes back from Google
+                    Flights in whatever currency was asked for. */}
+                <label className="currency-setting">
+                  <span>Currency</span>
+                  <select
+                    value={formState.currency}
+                    onChange={(event) => handleCurrencyChange(event.target.value)}
+                  >
+                    {config.currencies.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               {/* The scroll lives on this inner element, NOT on
                   .itinerary-list — Chromium leaves ghost repaint tiles when
                   a backdrop-filter element is itself scrolled. */}
               <div className="itinerary-list-scroll">
-                <table className="itinerary-table">
-                  <thead>
-                    <tr>
-                      <th className="col-price">Price</th>
-                      <th className="col-company">Company</th>
-                      <th className="col-schedule">Schedule</th>
-                    </tr>
-                  </thead>
-                  {results.results.map((flight, index) => (
-                    <ItineraryCard
-                      key={index}
-                      flight={flight}
-                      currency={results.currency}
-                      currencySymbols={config.currency_symbols}
-                    />
-                  ))}
-                </table>
+                <div className="itinerary-head">
+                  <span className="col-price">Price</span>
+                  <span className="col-company">Company</span>
+                  <span className="col-schedule">Schedule</span>
+                </div>
+                {results.results.map((flight, index) => (
+                  <ItineraryCard
+                    key={index}
+                    flight={flight}
+                    color={itineraryColors[index]}
+                    currency={results.currency}
+                    currencySymbols={config.currency_symbols}
+                    repricing={isRepricing}
+                  />
+                ))}
               </div>
             </div>
+            <RouteMap
+              mapFigure={results.map_figure}
+              routeResultIndices={results.route_result_indices}
+              resultColors={itineraryColors}
+              airports={airportsData.airports}
+              metroAreas={airportsData.metro_areas}
+              highlightedIndices={highlightedIndices}
+              onToggleHighlight={handleToggleHighlight}
+              onAirportClick={handleAirportClick}
+            />
           </div>
         </section>
       )}
 
-      {/* Price trend goes last, and only when the sweep is more than the
-          searched day itself (AEROQUERY_PRICE_TREND_DAYS on the backend;
-          exposed as config.price_trend_days). */}
-      {config.price_trend_days > 1 && (
+      {/* Price trend goes last, and only when the last search asked for a
+          window bigger than the searched day itself (the "Price trend"
+          field in the search form). */}
+      {searchTrendDays > 1 && (
         <>
           {trendProgress && (
             <ProgressBar
@@ -289,8 +365,9 @@ function App() {
               centerDate={trendCenterDate}
               currency={formState.currency}
               config={config}
+              trendDays={searchTrendDays}
               cheapestDirect={cheapestDirect}
-              xRange={priceTrendWindow(trendCenterDate, config.price_trend_days)}
+              xRange={priceTrendWindow(trendCenterDate, searchTrendDays)}
             />
           )}
         </>

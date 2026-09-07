@@ -15,9 +15,9 @@ at a glance.
   durations). Click a route to highlight it, or click any airport dot to
   pick a new origin/destination and search again.
 - **Price trend** — an optional sweep across a window of nearby departure
-  dates, streamed in progressively over Server-Sent Events and charted on a
-  log scale so you can see whether your date is a good one. Off by default;
-  see `AEROQUERY_PRICE_TREND_DAYS` below.
+  dates (pick the window in the search form's **Price trend** field —
+  `Off` by default), streamed in progressively over Server-Sent Events and
+  charted on a log scale so you can see whether your date is a good one.
 - **Itinerary cards** — per-leg times, aircraft type, and layover duration
   for every result, sorted by price.
 - **Neon dark theme** — one fixed cyberpunk palette shared by the map,
@@ -53,6 +53,17 @@ uv run uvicorn api.main:app --port 8000
 Open <http://localhost:8000>, enter an origin/destination airport (by IATA
 code, city, or name) and a departure date, and search.
 
+### Docker
+
+Everything (API + built frontend) runs from one image:
+
+```bash
+docker build -t aeroquery .
+docker run --rm -p 8000:8000 aeroquery
+```
+
+Open <http://localhost:8000>. Override the port with `-e PORT=9000 -p 9000:9000`.
+
 ### Development
 
 Run the API and the Vite dev server (with hot-reload) side by side:
@@ -64,14 +75,6 @@ cd web && npm run dev                              # terminal 2
 
 Then open the URL Vite prints (typically <http://localhost:5173>); it
 proxies `/api/*` to the backend on port 8000.
-
-### Configuration
-
-- `AEROQUERY_PRICE_TREND_DAYS` — number of consecutive departure dates the
-  price-trend sweep covers, centered on the searched date. Defaults to `1`
-  (no sweep — just the searched date), so a run doesn't fire ~180 Google
-  Flights requests per search unless asked to. Set e.g. `181` for a
-  six-month window.
 
 ## How it works
 

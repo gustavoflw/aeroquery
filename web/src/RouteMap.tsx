@@ -1,44 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Plot from 'react-plotly.js'
 import type * as Plotly from 'plotly.js'
 import { formatLocation } from './format'
 import type { AirportInfo, MetroArea, SearchResponse } from './types'
 
-function readViewport(): number {
-  return typeof window === 'undefined' ? 1280 : window.innerWidth
-}
-
-function useViewportWidth(): number {
-  const [width, setWidth] = useState(readViewport)
-  useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-  return width
-}
-
-// Width of the map's own box, matching App.css: `main` is
-// `max-width: 2200px` with `padding: 0 clamp(1rem, 3vw, 3rem)`, and the map
-// spans it fully.
-function mapBoxWidth(viewportWidth: number): number {
-  const pad = Math.min(48, Math.max(16, viewportWidth * 0.03))
-  return Math.min(2200, viewportWidth) - 2 * pad
-}
-
-// Below 40rem the itinerary list drops to a plain stack (App.css media
-// query) and the map gets its full width; above it the list floats over the
-// map's left edge, so shift the geo subplot right to clear it. The shift
-// tracks the panel's actual fraction of the box (.itinerary-list is 440px +
-// a ~24px gutter), capped so the map never loses more than 40%.
-function geoDomainStart(viewportWidth: number): number {
-  if (viewportWidth < 640) return 0
-  return Math.min(0.4, 464 / mapBoxWidth(viewportWidth))
-}
-
 interface RouteMapProps {
   mapFigure: SearchResponse['map_figure']
   routeResultIndices: number[]
+  // Neon colour per result index (from itineraryColor) — overrides the
+  // backend figure's palette so a route matches its list card.
+  resultColors: string[]
   airports: Record<string, AirportInfo>
   metroAreas: Record<string, MetroArea>
   highlightedIndices: Set<number>
@@ -63,7 +34,7 @@ function buildAllAirportsTrace(
     lon: codes.map((c) => airports[c].lon),
     lat: codes.map((c) => airports[c].lat),
     mode: 'markers',
-    marker: { size: 4, color: '#00f0ff', opacity: 0.35 },
+    marker: { size: 4, color: '#ffffff', opacity: 0.3 },
     hovertext: codes.map((c) => formatLocation(c, airports, metroAreas)),
     hoverinfo: 'text',
     name: 'All airports',
@@ -77,6 +48,7 @@ function buildAllAirportsTrace(
 function applyHighlighting(
   baseData: Plotly.Data[],
   routeResultIndices: number[],
+  resultColors: string[],
   highlightedIndices: Set<number>,
 ): Plotly.Data[] {
   const n = routeResultIndices.length
@@ -100,9 +72,11 @@ function applyHighlighting(
     const isDimmed = anyHighlighted && !isSelected
     // Traces are heterogeneous JSON from the backend, not a value built
     // against plotly.js's (quite restrictive) generated trace unions — a
-    // small local shape for just the two fields mutated here is more
-    // robust than fighting that union for an exact match.
-    const line = { ...(trace as { line?: { width?: number } }).line }
+    // small local shape for just the fields mutated here is more robust
+    // than fighting that union for an exact match. `color` is forced to the
+    // itinerary's shared neon colour, replacing the backend palette.
+    const line = { ...(trace as { line?: { width?: number; color?: string } }).line }
+    line.color = resultColors[resultIndex] ?? line.color
 
     if (isHalo) {
       line.width = isSelected ? 14 : 8
@@ -120,36 +94,78 @@ function applyHighlighting(
 export function RouteMap({
   mapFigure,
   routeResultIndices,
+  resultColors,
   airports,
   metroAreas,
   highlightedIndices,
   onToggleHighlight,
   onAirportClick,
 }: RouteMapProps) {
-  const viewportWidth = useViewportWidth()
   const allAirportsTrace = useMemo(
     () => buildAllAirportsTrace(airports, metroAreas),
     [airports, metroAreas],
   )
   const allAirportsCurve = mapFigure.data.length
 
-  // Pull the geo subplot into the portion of the box the floating itinerary
-  // list doesn't cover, so the drawn map isn't half-hidden behind the panel
-  // and uses what would otherwise be dead letterbox margin.
+  // react-plotly.js's useResizeHandler only listens for *window* resize, so
+  // in a flex layout the plot keeps whatever width it measured on mount and
+  // leaves blank space when its column is resized. Observe the wrapper and
+  // pass the size to Plotly explicitly instead.
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null)
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      setBox({ w: Math.round(width), h: Math.round(height) })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const layout = useMemo((): Partial<Plotly.Layout> => {
-    const base = { ...mapFigure.layout, autosize: true }
-    const domainStart = geoDomainStart(viewportWidth)
-    if (domainStart === 0) return base
-    const geo = (base as { geo?: Record<string, unknown> }).geo ?? {}
-    return { ...base, geo: { ...geo, domain: { x: [domainStart, 1], y: [0, 1] } } }
-  }, [mapFigure.layout, viewportWidth])
+    const base: Record<string, unknown> = { ...mapFigure.layout }
+    if (!box) return { ...base, autosize: true }
+    base.width = box.w
+    base.height = box.h
+    base.autosize = false
+
+    // The backend pins both lat and lon ranges, so Plotly fits the tighter
+    // one and letterboxes the other. When the frame is wider than the route,
+    // widen the longitude range to match so the map fills the frame's width
+    // (the route just sits in more surrounding ocean). We only ever widen
+    // longitude — never shrink the route to fill vertical space; a bit of
+    // top/bottom letterbox is fine (the legend lives there anyway). `k` is
+    // the rough horizontal squash of "natural earth" at the region's mid
+    // latitude.
+    const geo = { ...((base.geo as Record<string, unknown>) ?? {}) }
+    const lonAxis = geo.lonaxis as { range?: [number, number] } | undefined
+    const latR = (geo.lataxis as { range?: [number, number] } | undefined)?.range
+    const lonR = lonAxis?.range
+    if (latR && lonR) {
+      const latW = latR[1] - latR[0]
+      const lonW = lonR[1] - lonR[0]
+      const lonMid = (lonR[0] + lonR[1]) / 2
+      const latMid = (latR[0] + latR[1]) / 2
+      const k = Math.min(1, Math.max(0.35, Math.cos((latMid * Math.PI) / 180)))
+      const boxAspect = box.w / box.h
+      const regionAspect = (lonW * k) / latW
+      if (boxAspect > regionAspect) {
+        const target = Math.min(350, (boxAspect * latW) / k)
+        geo.lonaxis = { ...lonAxis, range: [lonMid - target / 2, lonMid + target / 2] }
+        base.geo = geo
+      }
+    }
+    return base as Partial<Plotly.Layout>
+  }, [mapFigure.layout, box])
 
   const data = useMemo(
     () => [
-      ...applyHighlighting(mapFigure.data, routeResultIndices, highlightedIndices),
+      ...applyHighlighting(mapFigure.data, routeResultIndices, resultColors, highlightedIndices),
       allAirportsTrace,
     ],
-    [mapFigure.data, routeResultIndices, highlightedIndices, allAirportsTrace],
+    [mapFigure.data, routeResultIndices, resultColors, highlightedIndices, allAirportsTrace],
   )
 
   function handleClick(event: Readonly<Plotly.PlotMouseEvent>) {
@@ -168,13 +184,14 @@ export function RouteMap({
   }
 
   return (
-    <Plot
-      data={data}
-      layout={layout}
-      style={{ width: '100%', height: '600px' }}
-      useResizeHandler
-      config={{ displaylogo: false }}
-      onClick={handleClick}
-    />
+    <div className="route-map" ref={wrapRef}>
+      <Plot
+        data={data}
+        layout={layout}
+        style={{ width: '100%', height: '100%' }}
+        config={{ displaylogo: false }}
+        onClick={handleClick}
+      />
+    </div>
   )
 }

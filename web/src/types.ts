@@ -24,8 +24,10 @@ export interface AirportsResponse {
 // read from a style dict of this shape.
 export interface MapStyle {
   route_colors: string[]
+  map_bg: string
   landcolor: string
   countrycolor: string
+  coastlinecolor: string
   airport_dot: string
   airport_text: string
   legend_font: string
@@ -43,12 +45,12 @@ export interface ConfigResponse {
   default_currency: string
   currency_symbols: Record<string, string>
   max_stops_options: Record<string, number | null>
+  // Price-trend window choices for the search form: label -> number of
+  // consecutive dates the sweep covers. `default_trend_days` is 1 ("Off").
+  trend_days_options: Record<string, number>
+  default_trend_days: number
   map_style: MapStyle
   neon_bg: string
-  // Number of consecutive dates the price-trend sweep covers, from the
-  // backend's $AEROQUERY_PRICE_TREND_DAYS (default 1 — no sweep, just the
-  // searched date). Drives the chart header and its fixed x-axis range.
-  price_trend_days: number
 }
 
 export interface FlightLeg {
@@ -85,6 +87,7 @@ export interface SearchParams {
   date: string
   maxStops: number | null
   currency: string
+  trendDays: number
 }
 
 // The search form's fields, lifted up to App so the airport-picker popover
@@ -96,6 +99,7 @@ export interface FormState {
   date: string
   maxStopsLabel: string
   currency: string
+  trendDaysLabel: string
 }
 
 // Mirrors core.flights.price_trend_stats's per-day row shape.

@@ -8,6 +8,7 @@ interface PriceTrendChartProps {
   centerDate: string
   currency: string
   config: ConfigResponse
+  trendDays: number
   cheapestDirect: CheapestDirect | null
   xRange: [string, string]
 }
@@ -17,6 +18,7 @@ export function PriceTrendChart({
   centerDate,
   currency,
   config,
+  trendDays,
   cheapestDirect,
   xRange,
 }: PriceTrendChartProps) {
@@ -40,7 +42,7 @@ export function PriceTrendChart({
   return (
     <div className="panel price-trend">
       <h2>
-        📈 Price trend — {config.price_trend_days} {config.price_trend_days === 1 ? 'day' : 'days'}
+        📈 Price trend — {trendDays} {trendDays === 1 ? 'day' : 'days'}
       </h2>
       <Plot
         data={figure.data}

@@ -189,7 +189,7 @@ export function buildPriceTrendChartFigure(
     })
   }
 
-  const searchColor = '#00f0ff'
+  const searchColor = '#ffffff'
   const shapes = [
     {
       type: 'line',
@@ -199,7 +199,7 @@ export function buildPriceTrendChartFigure(
       x1: centerDate,
       y0: 0,
       y1: 1,
-      line: { color: 'rgba(0,240,255,0.25)', width: 8 },
+      line: { color: 'rgba(255,255,255,0.28)', width: 8 },
       layer: 'below',
     },
     {

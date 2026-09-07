@@ -1,5 +1,11 @@
+import { DatePicker } from './DatePicker'
 import { LocationInput } from './LocationInput'
 import type { AirportInfo, ConfigResponse, FormState, MetroArea } from './types'
+
+// Local-time YYYY-MM-DD (en-CA formats exactly that way).
+function todayIso(): string {
+  return new Date().toLocaleDateString('en-CA')
+}
 
 interface SearchFormProps {
   airports: Record<string, AirportInfo>
@@ -20,7 +26,7 @@ export function SearchForm({
   onSubmit,
   isSearching,
 }: SearchFormProps) {
-  const { origin, destination, date, maxStopsLabel, currency } = formState
+  const { origin, destination, date, maxStopsLabel, trendDaysLabel } = formState
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -51,11 +57,11 @@ export function SearchForm({
       <div className="search-row">
         <label className="field">
           Departure date
-          <input
-            type="date"
+          <DatePicker
+            id="departure-date"
             value={date}
-            onChange={(event) => onFormStateChange({ date: event.target.value })}
-            required
+            min={todayIso()}
+            onChange={(iso) => onFormStateChange({ date: iso })}
           />
         </label>
         <label className="field">
@@ -72,14 +78,14 @@ export function SearchForm({
           </select>
         </label>
         <label className="field">
-          Currency
+          Price trend
           <select
-            value={currency}
-            onChange={(event) => onFormStateChange({ currency: event.target.value })}
+            value={trendDaysLabel}
+            onChange={(event) => onFormStateChange({ trendDaysLabel: event.target.value })}
           >
-            {config.currencies.map((code) => (
-              <option key={code} value={code}>
-                {code}
+            {Object.keys(config.trend_days_options).map((optionLabel) => (
+              <option key={optionLabel} value={optionLabel}>
+                {optionLabel}
               </option>
             ))}
           </select>

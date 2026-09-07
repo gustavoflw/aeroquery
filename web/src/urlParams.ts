@@ -31,6 +31,9 @@ export function readFormStateFromUrl(
   const maxStops = params.get('max_stops')
   if (maxStops && maxStops in config.max_stops_options) patch.maxStopsLabel = maxStops
 
+  const trendDays = params.get('trend_days')
+  if (trendDays && trendDays in config.trend_days_options) patch.trendDaysLabel = trendDays
+
   const currency = params.get('currency')
   if (currency && config.currencies.includes(currency)) patch.currency = currency
 
@@ -50,6 +53,7 @@ export function writeFormStateToUrl(state: FormState): void {
     destination: state.destination,
     date: state.date,
     max_stops: state.maxStopsLabel,
+    trend_days: state.trendDaysLabel,
     currency: state.currency,
   })
   window.history.replaceState(null, '', `?${params.toString()}`)

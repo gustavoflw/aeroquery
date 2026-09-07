@@ -8,7 +8,6 @@ to know what's rendering its results.
 """
 
 import datetime as dt
-import os
 import statistics
 import threading
 import time
@@ -26,25 +25,12 @@ from primp import Client
 # EU/EEA. Sending an already-accepted SOCS cookie skips it.
 EU_CONSENT_COOKIE = "CAESHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzIaAmVuIAEaBgiA_LyaBg"
 
-# Every search also fetches one day of prices at a time across
-# PRICE_TREND_TOTAL_DAYS consecutive dates centered on the chosen date —
-# shifted forward whenever that centering would reach before today, since
-# Google Flights has no fares for past dates, so the trend always covers a
-# full PRICE_TREND_TOTAL_DAYS days from wherever it starts.
-#
-# The count comes from $AEROQUERY_PRICE_TREND_DAYS and defaults to 1 — i.e.
-# no sweep at all, just the searched date itself — so an unconfigured run
-# doesn't fire ~180 Google Flights requests per search. Set it to e.g. 181
-# to restore the original six-month window. Anything unparseable or below 1
-# falls back to 1.
-def _price_trend_days() -> int:
-    try:
-        return max(1, int(os.environ.get("AEROQUERY_PRICE_TREND_DAYS", "1")))
-    except ValueError:
-        return 1
-
-
-PRICE_TREND_TOTAL_DAYS = _price_trend_days()
+# The price-trend sweep fetches one day of prices at a time across N
+# consecutive dates centered on the chosen date — shifted forward whenever
+# that centering would reach before today, since Google Flights has no fares
+# for past dates, so the trend always covers a full N days from wherever it
+# starts. N (`total_days`) is a per-search argument, defaulting to 1 — i.e.
+# no sweep at all, just the searched date itself.
 PRICE_TREND_MAX_WORKERS = 8
 # Minimum time between progressive on_update callbacks while the sweep below
 # is still running — firing on every single day would be far faster than a
@@ -93,8 +79,8 @@ def fetch_flights_with_retry(query: Query) -> list:
 # Shared, process-wide TTL cache: keyed on every argument below (route
 # "cities", date, stops, currency), so each day/route/filter combination is
 # fetched from Google at most once every 24h — a search's multi-day sweep
-# (when one is configured) mostly hits cache after the first time, and
-# re-running the same search later the same day is instant. maxsize is
+# (when the search asked for one) mostly hits cache after the first time,
+# and re-running the same search later the same day is instant. maxsize is
 # generous headroom over one search's own footprint (up to ~2 fetches/day
 # across the trend window) so a handful of concurrent searches don't evict
 # each other's entries. The lock only guards
@@ -157,14 +143,14 @@ def flight_identity(flight) -> tuple:
     return (flight.price, tuple(flight.airlines), leg.departure.time, leg.arrival.time)
 
 
-def price_trend_window(center_date_iso: str) -> tuple[dt.date, dt.date]:
+def price_trend_window(center_date_iso: str, total_days: int = 1) -> tuple[dt.date, dt.date]:
     """The (start, end) date bounds fetch_price_trend sweeps for a given
-    searched date — see fetch_price_trend for why this isn't always
-    centered. Shared with the chart builder so the x-axis can be pinned to
-    the same fixed range from the first render instead of growing with
-    however much data has streamed in so far. With the default one-day
-    window, start == end (the searched date itself, or today if it's past)."""
-    span = PRICE_TREND_TOTAL_DAYS - 1
+    searched date and window size — see fetch_price_trend for why this isn't
+    always centered. Shared with the chart builder so the x-axis can be
+    pinned to the same fixed range from the first render instead of growing
+    with however much data has streamed in so far. With total_days == 1,
+    start == end (the searched date itself, or today if it's past)."""
+    span = total_days - 1
     center = dt.date.fromisoformat(center_date_iso)
     start = max(dt.date.today(), center - dt.timedelta(days=span // 2))
     return start, start + dt.timedelta(days=span)
@@ -176,16 +162,16 @@ def fetch_price_trend(
     center_date_iso: str,
     max_stops: int | None,
     currency: str,
+    total_days: int = 1,
     on_update: Callable[[dict[str, list]], None] | None = None,
     on_progress: Callable[[int, int, float | None], None] | None = None,
 ) -> dict[str, list]:
-    """Fetch every day across PRICE_TREND_TOTAL_DAYS consecutive dates
-    centered on the searched date — just the searched date itself by
-    default (see the constant). The window shifts forward whenever centering
-    it would start before today, so it always covers a full
-    PRICE_TREND_TOTAL_DAYS days from wherever it starts. Each date is
-    independently cached by search_flights, so this is only ever slow on a
-    genuine cache miss.
+    """Fetch every day across `total_days` consecutive dates centered on the
+    searched date — just the searched date itself when total_days == 1. The
+    window shifts forward whenever centering it would start before today, so
+    it always covers a full `total_days` days from wherever it starts. Each
+    date is independently cached by search_flights, so this is only ever slow
+    on a genuine cache miss.
 
     The searched date itself is fetched first, synchronously, and handed to
     on_update alone before the rest of the window is even submitted to the
@@ -203,8 +189,8 @@ def fetch_price_trend(
 
     Returns {date_iso: [Flight, ...]}.
     """
-    start, _ = price_trend_window(center_date_iso)
-    dates = [start + dt.timedelta(days=offset) for offset in range(PRICE_TREND_TOTAL_DAYS)]
+    start, _ = price_trend_window(center_date_iso, total_days)
+    dates = [start + dt.timedelta(days=offset) for offset in range(max(1, total_days))]
     total = len(dates)
 
     results_by_date: dict[str, list] = {

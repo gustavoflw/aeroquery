@@ -3,8 +3,10 @@ from tests.conftest import make_flight, make_leg
 
 STYLE = dict(
     route_colors=["red", "green", "blue"],
+    map_bg="#000",
     landcolor="#000",
     countrycolor="#000",
+    coastlinecolor="#000",
     airport_dot="#000",
     airport_text="#000",
     legend_font="#000",

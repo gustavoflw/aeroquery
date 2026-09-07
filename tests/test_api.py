@@ -32,8 +32,10 @@ def test_get_config_exposes_currencies_symbols_and_stop_options():
     assert body["max_stops_options"] == {"Any": None, "Nonstop": 0, "1 stop": 1, "2 stops": 2}
     assert len(body["map_style"]["route_colors"]) == 8
     assert body["neon_bg"] == "#0a0118"
-    # $AEROQUERY_PRICE_TREND_DAYS unset in the test env -> sweep off.
-    assert body["price_trend_days"] == 1
+    # Price-trend window is a search-form choice now, off by default.
+    assert body["default_trend_days"] == 1
+    assert body["trend_days_options"]["Off"] == 1
+    assert 180 in body["trend_days_options"].values()
 
 
 def test_get_search_returns_sorted_results_and_map_figure_without_all_airports(monkeypatch):
@@ -65,7 +67,14 @@ def test_get_search_returns_sorted_results_and_map_figure_without_all_airports(m
 
 def test_get_trend_streams_progress_then_trend_events(monkeypatch):
     def fake_fetch_price_trend(
-        origin, destination, date, max_stops, currency, on_update=None, on_progress=None
+        origin,
+        destination,
+        date,
+        max_stops,
+        currency,
+        total_days=1,
+        on_update=None,
+        on_progress=None,
     ):
         on_progress(1, 2, None)
         on_update({date: [make_flight(price=99, legs=[make_leg("CDG", "JFK")])]})

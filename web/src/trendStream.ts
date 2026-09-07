@@ -25,6 +25,7 @@ export function streamTrend(
     destination: params.destination,
     date: params.date,
     currency: params.currency,
+    trend_days: String(params.trendDays),
   })
   if (params.maxStops !== null) query.set('max_stops', String(params.maxStops))
 

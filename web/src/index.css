@@ -13,11 +13,15 @@
    spacing stay consistent and are changed in one place. The route map and
    airport popover pull their border/radius from the same tokens. */
 :root {
+  /* Neon accent as an "R, G, B" triple so it can be dropped into rgba().
+     Change this one line to re-tint the whole UI. */
+  --neon-rgb: 255, 255, 255;
+
   --panel-bg: rgba(18, 10, 36, 0.55);
-  --panel-border-color: rgba(0, 240, 255, 0.3);
+  --panel-border-color: rgba(var(--neon-rgb), 0.3);
   --panel-radius: 16px;
   --panel-shadow:
-    0 0 24px rgba(0, 240, 255, 0.12),
+    0 0 24px rgba(var(--neon-rgb), 0.12),
     0 0 60px rgba(255, 43, 214, 0.08);
   --panel-blur: blur(10px);
   --panel-pad: 1.5rem;
@@ -33,7 +37,7 @@ body,
 body {
   margin: 0;
   background:
-    radial-gradient(1200px 600px at 12% -10%, rgba(0, 240, 255, 0.12), transparent 60%),
+    radial-gradient(1200px 600px at 12% -10%, rgba(var(--neon-rgb), 0.12), transparent 60%),
     radial-gradient(1000px 700px at 105% 15%, rgba(255, 43, 214, 0.12), transparent 55%),
     linear-gradient(180deg, #0a0118 0%, #050010 100%);
   background-attachment: fixed;

@@ -35,7 +35,7 @@ NEON_BG = "#0a0118"
 # two copies drifting apart.
 MAP_STYLE = dict(
     route_colors=[
-        "#0095ff",  # blue
+        "#ffffff",  # white
         "#e86c00",  # orange
         "#00ad8b",  # aqua
         "#b09300",  # yellow
@@ -44,14 +44,16 @@ MAP_STYLE = dict(
         "#7700ff",  # violet
         "#ff002b",  # red
     ],
-    landcolor="#140a24",
-    countrycolor="#3d2a63",
-    airport_dot="#00f0ff",
+    map_bg="#0e0e10",
+    landcolor="#1c1c21",
+    countrycolor="rgba(255,255,255,0.16)",
+    coastlinecolor="rgba(255,255,255,0.28)",
+    airport_dot="#ffffff",
     airport_text="#e7e6f5",
     legend_font="#e7e6f5",
     legend_title_font="#a79fd1",
     panel_bg="rgba(14,7,28,0.82)",
-    panel_border="rgba(0,240,255,0.35)",
+    panel_border="rgba(255,255,255,0.38)",
     stop_ok="#00ad8b",
     stop_warn="#b09300",
     stop_bad="#ff002b",
@@ -278,36 +280,33 @@ def build_route_map(
         lat_hi = min(max(all_lats) + lat_pad, 85)
         lon_lo = min(all_lons) - lon_pad
         lon_hi = max(all_lons) + lon_pad
-        # The map renders in a landscape box (~600px tall, far wider), but a
-        # mostly north-south route (e.g. Lisbon→São Paulo) has a lon span far
-        # smaller than its lat span — Plotly then fits that tall-narrow
-        # window into the box and letterboxes it into a thin central strip.
-        # Widen the lon range toward the box's own aspect so the content
-        # actually fills the width; the route just sits in more surrounding
-        # ocean, which reads as intentional rather than broken.
-        min_lon_range = (lat_hi - lat_lo) * 1.6
-        if (lon_hi - lon_lo) < min_lon_range:
-            mid = (lon_lo + lon_hi) / 2
-            lon_lo = max(mid - min_lon_range / 2, -180)
-            lon_hi = min(mid + min_lon_range / 2, 180)
+        # These bounds hug the route; the frontend (RouteMap.tsx) then widens
+        # whichever axis is needed to match the map frame's actual aspect
+        # ratio so the drawn map fills its box without letterboxing. Doing it
+        # there rather than here means it adapts to the real rendered size
+        # (desktop column vs full-width mobile) instead of a fixed guess.
         geo_range = dict(
             lataxis=dict(range=[lat_lo, lat_hi]),
             lonaxis=dict(range=[lon_lo, lon_hi]),
         )
+    # An opaque near-neutral dark base (no purple tint) so the map reads as
+    # its own panel rather than showing the page's tinted backdrop through
+    # the transparent ocean.
+    map_bg = style["map_bg"]
     fig.update_geos(
         projection_type="natural earth",
         **geo_range,
-        bgcolor="rgba(0,0,0,0)",
+        bgcolor=map_bg,
         showframe=False,
         showland=True,
         landcolor=style["landcolor"],
         showocean=True,
-        oceancolor="rgba(0,0,0,0)",
+        oceancolor=map_bg,
         showlakes=True,
-        lakecolor="rgba(0,0,0,0)",
+        lakecolor=map_bg,
         showcountries=True,
         countrycolor=style["countrycolor"],
-        coastlinecolor=style["countrycolor"],
+        coastlinecolor=style["coastlinecolor"],
     )
     fig.update_layout(
         height=map_height,
@@ -322,7 +321,7 @@ def build_route_map(
             x=0,
             bgcolor="rgba(0,0,0,0)",
         ),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor=map_bg,
+        plot_bgcolor=map_bg,
     )
     return fig

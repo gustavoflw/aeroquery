@@ -20,9 +20,14 @@ from fastapi.staticfiles import StaticFiles
 
 from core.airports import METRO_AREAS, METRO_MEMBERS, load_airports
 from core.charts import MAP_STYLE, NEON_BG, build_route_map, find_plottable_routes
-from core.config import CURRENCY_CODES, DEFAULT_CURRENCY, MAX_STOPS_OPTIONS
+from core.config import (
+    CURRENCY_CODES,
+    DEFAULT_CURRENCY,
+    DEFAULT_TREND_DAYS,
+    MAX_STOPS_OPTIONS,
+    TREND_DAYS_OPTIONS,
+)
 from core.flights import (
-    PRICE_TREND_TOTAL_DAYS,
     cheapest_direct_flight,
     fetch_price_trend,
     price_trend_stats,
@@ -81,22 +86,22 @@ def get_airports():
 def get_config():
     """Search-form configuration: every currency fast_flights supports (not
     just the ones with a nice symbol), the symbol table for formatting
-    prices client-side, the max-stops filter options, and the color theme
-    (map_style/neon_bg) so a client-built chart — see /api/trend, whose
-    price-trend chart is built in JS rather than sent as figure JSON —
-    matches build_route_map's colors exactly. Also the price-trend window
-    width (price_trend_days, from $AEROQUERY_PRICE_TREND_DAYS; 1 means the
-    sweep is off and /api/trend just returns the searched date) so the chart
-    header and fixed x-axis range match what the backend actually streams.
-    Static for the life of the process — fetch once, same as /api/airports."""
+    prices client-side, the max-stops filter options, the price-trend window
+    choices (trend_days_options label->N, and default_trend_days=1 meaning
+    off) offered in the search bar, and the color theme (map_style/neon_bg)
+    so a client-built chart — see /api/trend, whose price-trend chart is
+    built in JS rather than sent as figure JSON — matches build_route_map's
+    colors exactly. Static for the life of the process — fetch once, same as
+    /api/airports."""
     return {
         "currencies": CURRENCY_CODES,
         "default_currency": DEFAULT_CURRENCY,
         "currency_symbols": CURRENCY_SYMBOLS,
         "max_stops_options": MAX_STOPS_OPTIONS,
+        "trend_days_options": TREND_DAYS_OPTIONS,
+        "default_trend_days": DEFAULT_TREND_DAYS,
         "map_style": MAP_STYLE,
         "neon_bg": NEON_BG,
-        "price_trend_days": PRICE_TREND_TOTAL_DAYS,
     }
 
 
@@ -141,6 +146,7 @@ async def get_trend(
     date: str,
     max_stops: int | None = None,
     currency: str = "EUR",
+    trend_days: int = 1,
 ):
     """Server-Sent Events stream of the progressive price-trend sweep — each
     fetch_price_trend on_update/on_progress firing becomes one `data: {...}`
@@ -188,6 +194,7 @@ async def get_trend(
                     date,
                     max_stops,
                     currency,
+                    total_days=max(1, trend_days),
                     on_update=on_update,
                     on_progress=on_progress,
                 )
