@@ -1,0 +1,28 @@
+# VCS / tooling
+.git
+.github
+.vscode
+.claude
+.pytest_cache
+.ruff_cache
+
+# Python envs / caches (rebuilt inside the image)
+.venv
+.pyenv
+__pycache__
+*.py[cod]
+*.egg-info
+
+# Node (reinstalled inside the web-build stage)
+web/node_modules
+web/dist
+
+# Tests, docs, local assets not needed at runtime
+tests
+image.png
+*.md
+!README.md
+
+# Editor / OS cruft
+.DS_Store
+*.local

@@ -1,0 +1,771 @@
+main {
+  max-width: 2200px;
+  margin: 2.5rem auto;
+  padding: 0 clamp(1rem, 3vw, 3rem);
+  font-family: system-ui, sans-serif;
+}
+
+/* Shared container for every top-level block on the page — see the token
+   comment in index.css. Anything section-level (the search form, the price
+   trend, future panels) gets class="panel" and inherits this look; it fills
+   the full width of `main`. */
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border-color);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: var(--panel-blur);
+  padding: var(--panel-pad);
+  margin-bottom: var(--section-gap);
+}
+
+main.status {
+  text-align: center;
+  margin-top: 6rem;
+}
+
+h1 {
+  margin-bottom: 1.5rem;
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 800;
+  color: #f5f3ff;
+  text-shadow:
+    0 0 8px rgba(var(--neon-rgb), 0.85),
+    0 0 22px rgba(var(--neon-rgb), 0.45),
+    0 0 46px rgba(255, 43, 214, 0.35);
+  letter-spacing: 0.5px;
+}
+
+.error {
+  color: #ff6b6b;
+}
+
+/* Search form: layout only — the glass-panel look comes from .panel. */
+
+.search-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  /* lifts the form's stacking context (and so the date-picker popover)
+     above the itinerary panel's backdrop-filter context (z-index 10). */
+  position: relative;
+  z-index: 20;
+}
+
+.search-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.search-row > * {
+  flex: 1;
+  min-width: 12rem;
+}
+
+/* Origin/destination (first row) fill the panel width; date / max stops /
+   currency (any later row) stay at a readable size instead of stretching. */
+.search-row ~ .search-row > * {
+  flex: 0 1 18rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+/* Neon field labels — the label text only (.field is the <label>; the
+   LocationInput label is a sibling of its input). The value inside each
+   control is reset below so only the labels glow. */
+.field,
+.location-input > label {
+  color: rgb(var(--neon-rgb));
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-shadow:
+    0 0 2px rgba(var(--neon-rgb), 0.55),
+    0 0 9px rgba(var(--neon-rgb), 0.6),
+    0 0 18px rgba(var(--neon-rgb), 0.32);
+}
+
+.search-form input,
+.search-form select {
+  padding: 0.5rem;
+  font-size: 1rem;
+  background: rgba(18, 10, 36, 0.65);
+  border: 1px solid rgba(var(--neon-rgb), 0.3);
+  border-radius: 10px;
+  color: #f2f0ff;
+  font-weight: 400;
+  text-shadow: none;
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.search-form input:focus,
+.search-form select:focus {
+  outline: none;
+  border-color: rgba(var(--neon-rgb), 0.9);
+  box-shadow:
+    0 0 0 1px rgba(var(--neon-rgb), 0.35),
+    0 0 14px rgba(var(--neon-rgb), 0.55);
+}
+
+.search-form > button {
+  align-self: flex-start;
+  padding: 0.6rem 1.6rem;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid rgba(var(--neon-rgb), 0.8);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(var(--neon-rgb), 0.22), rgba(255, 43, 214, 0.22));
+  color: #eafeff;
+  text-shadow:
+    0 0 4px rgba(var(--neon-rgb), 0.95),
+    0 0 12px rgba(var(--neon-rgb), 0.7),
+    0 0 22px rgba(var(--neon-rgb), 0.35);
+  box-shadow:
+    0 0 0 1px rgba(var(--neon-rgb), 0.25),
+    0 0 14px rgba(var(--neon-rgb), 0.5),
+    0 0 30px rgba(255, 43, 214, 0.28),
+    inset 0 0 16px -6px rgba(var(--neon-rgb), 0.5);
+  cursor: pointer;
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease,
+    text-shadow 0.15s ease;
+}
+
+.search-form > button:hover:not(:disabled) {
+  border-color: rgba(255, 43, 214, 0.9);
+  text-shadow:
+    0 0 5px rgba(var(--neon-rgb), 1),
+    0 0 16px rgba(var(--neon-rgb), 0.85),
+    0 0 30px rgba(255, 43, 214, 0.6);
+  box-shadow:
+    0 0 0 1px rgba(var(--neon-rgb), 0.4),
+    0 0 20px rgba(var(--neon-rgb), 0.8),
+    0 0 46px rgba(255, 43, 214, 0.55),
+    inset 0 0 18px -4px rgba(var(--neon-rgb), 0.6);
+}
+
+.search-form > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Location combobox */
+
+.location-input {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.location-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: #140a24;
+  border: 1px solid rgba(var(--neon-rgb), 0.3);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.location-suggestions li {
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #e7e6f5;
+}
+
+.location-suggestions li.highlighted {
+  background: rgba(var(--neon-rgb), 0.18);
+  color: #f5f3ff;
+}
+
+/* Date picker — a themed calendar the field opens as a dropdown. */
+
+.date-picker {
+  position: relative;
+}
+
+.date-picker-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem;
+  font-size: 1rem;
+  text-align: left;
+  background: rgba(18, 10, 36, 0.65);
+  border: 1px solid rgba(var(--neon-rgb), 0.3);
+  border-radius: 10px;
+  color: #f2f0ff;
+  font-weight: 400;
+  text-shadow: none;
+  cursor: pointer;
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.date-picker-field:focus-visible,
+.date-picker-field[aria-expanded='true'] {
+  outline: none;
+  border-color: rgba(var(--neon-rgb), 0.9);
+  box-shadow:
+    0 0 0 1px rgba(var(--neon-rgb), 0.35),
+    0 0 14px rgba(var(--neon-rgb), 0.55);
+}
+
+.date-picker-caret {
+  color: rgb(var(--neon-rgb));
+  font-size: 0.75rem;
+}
+
+.date-picker-popover {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 20;
+  width: 17rem;
+  max-width: 80vw;
+  padding: 0.6rem;
+  background: #140a24;
+  border: 1px solid rgba(var(--neon-rgb), 0.35);
+  border-radius: 12px;
+  box-shadow:
+    0 0 26px rgba(var(--neon-rgb), 0.15),
+    0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.date-picker-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+
+.date-picker-nav button {
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid rgba(var(--neon-rgb), 0.3);
+  border-radius: 8px;
+  color: rgb(var(--neon-rgb));
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.date-picker-nav button:hover {
+  background: rgba(var(--neon-rgb), 0.15);
+  border-color: rgba(var(--neon-rgb), 0.7);
+}
+
+.date-picker-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: rgb(var(--neon-rgb));
+  text-shadow:
+    0 0 8px rgba(var(--neon-rgb), 0.55),
+    0 0 16px rgba(var(--neon-rgb), 0.28);
+}
+
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.date-picker-weekday {
+  padding: 0.2rem 0;
+  text-align: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a79fd1;
+}
+
+.date-picker-day {
+  min-width: 0;
+  width: 100%;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 0.82rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #e7e6f5;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.date-picker-day:hover:not(:disabled) {
+  border-color: rgba(var(--neon-rgb), 0.55);
+  background: rgba(var(--neon-rgb), 0.12);
+}
+
+.date-picker-day.selected {
+  background: linear-gradient(135deg, rgba(var(--neon-rgb), 0.3), rgba(255, 43, 214, 0.3));
+  border-color: rgba(var(--neon-rgb), 0.8);
+  color: #f5f3ff;
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(var(--neon-rgb), 0.5);
+}
+
+.date-picker-day:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+/* Results */
+
+.results-summary {
+  color: #a79fd1;
+  font-size: 0.9rem;
+}
+
+/* The itinerary list and the map sit side by side, each in its own frame;
+   below 48rem they stack with the list on top. The list's
+   background/border-color come from config.map_style (panel_bg /
+   panel_border) so they track the Python-side MAP_STYLE. */
+
+.results-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: var(--section-gap);
+}
+
+.itinerary-list {
+  flex: 0 0 24rem;
+  display: flex;
+  flex-direction: column;
+  max-height: 600px; /* matches RouteMap's fixed plot height */
+  padding: 12px 14px;
+  border: 1px solid;
+  border-radius: 12px;
+  backdrop-filter: blur(6px);
+  box-shadow:
+    0 0 26px rgba(var(--neon-rgb), 0.1),
+    0 0 60px rgba(255, 43, 214, 0.06);
+}
+
+.itinerary-list-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.itinerary-list-title {
+  margin: 0;
+  font-weight: 700;
+  color: rgb(var(--neon-rgb));
+  text-shadow:
+    0 0 2px rgba(var(--neon-rgb), 0.55),
+    0 0 9px rgba(var(--neon-rgb), 0.6),
+    0 0 18px rgba(var(--neon-rgb), 0.3);
+}
+
+/* Currency: a results setting, not a search field. */
+.currency-setting {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a79fd1;
+}
+
+.currency-setting select {
+  padding: 0.15rem 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  background: rgba(18, 10, 36, 0.75);
+  border: 1px solid rgba(var(--neon-rgb), 0.35);
+  border-radius: 7px;
+  color: #eafeff;
+  cursor: pointer;
+}
+
+.currency-setting select:focus-visible {
+  outline: none;
+  border-color: rgba(var(--neon-rgb), 0.85);
+  box-shadow: 0 0 10px rgba(var(--neon-rgb), 0.5);
+}
+
+.itinerary-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--neon-rgb), 0.35) transparent;
+}
+
+.itinerary-list-scroll .itinerary:last-child {
+  margin-bottom: 10px;
+}
+
+/* Stack the list on top of the map on narrow screens. */
+@media (max-width: 48rem) {
+  .results-layout {
+    flex-direction: column;
+  }
+
+  .itinerary-list {
+    flex: none;
+    width: 100%;
+    max-height: min(65vh, 32rem);
+  }
+
+  .route-map {
+    width: 100%;
+  }
+}
+
+/* The list is a stack of bordered cards. The header (.itinerary-head) and
+   every card share the same column geometry — a fixed Price column, then a
+   fixed Company column, then Schedule filling the rest — so everything
+   lines up down the list without a single <table>. Header lays it out with
+   flex; a card puts Price in a flex child and the rest in `.details`, a
+   2-column (Company | Schedule) grid running one row per leg, aligned, with
+   a rule (.leg-sep) between legs. Each card's border + glow is its
+   itinerary colour (--itin-color, set inline in ItineraryCard, shared with
+   that route on the map). */
+
+.itinerary-head,
+.itinerary {
+  display: flex;
+  column-gap: 10px;
+  font-size: 0.8rem;
+  color: #e7e6f5;
+}
+
+.itinerary-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 12px 6px;
+  background: rgba(20, 11, 34, 0.97);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgb(var(--neon-rgb));
+  text-shadow:
+    0 0 2px rgba(var(--neon-rgb), 0.5),
+    0 0 7px rgba(var(--neon-rgb), 0.5),
+    0 0 14px rgba(var(--neon-rgb), 0.26);
+  border-bottom: 1px solid var(--panel-border-color);
+}
+
+.itinerary-head .col-price {
+  flex: 0 0 3.4rem;
+}
+
+.itinerary-head .col-company {
+  flex: 0 0 5.5rem;
+}
+
+.itinerary-head .col-schedule {
+  flex: 1;
+}
+
+.itinerary {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--itin-color, var(--panel-border-color));
+  border-radius: 10px;
+  background: rgba(18, 10, 36, 0.5);
+  box-shadow:
+    0 0 0 1px var(--itin-color),
+    0 0 10px -1px var(--itin-color),
+    0 0 24px -6px var(--itin-color),
+    inset 0 0 24px -16px var(--itin-color);
+}
+
+.itinerary .col-price {
+  flex: 0 0 3.4rem;
+}
+
+.itinerary .col-price .price {
+  display: block;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: #f7f5ff;
+  /* neon-sign glow in the itinerary's own colour */
+  text-shadow:
+    0 0 3px color-mix(in srgb, var(--itin-color) 70%, #fff),
+    0 0 10px var(--itin-color),
+    0 0 20px color-mix(in srgb, var(--itin-color) 55%, transparent);
+}
+
+.itinerary .col-price .stops {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #a79fd1;
+}
+
+/* Shown in place of the price while a currency change refetches — the rest
+   of the itinerary (schedule, layovers, total) stays put. */
+.itinerary .price-loading {
+  display: block;
+  width: 3.4rem;
+  height: 0.95rem;
+  border-radius: 4px;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.05) 0%,
+      color-mix(in srgb, var(--itin-color) 55%, transparent) 50%,
+      rgba(255, 255, 255, 0.05) 100%
+    );
+  background-size: 220% 100%;
+  animation: price-shimmer 1.1s ease-in-out infinite;
+}
+
+@keyframes price-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+.itinerary .details {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  column-gap: 10px;
+  row-gap: 2px;
+  align-content: start;
+}
+
+.itinerary .leg-company {
+  grid-column: 1;
+  align-self: start;
+  white-space: normal;
+  overflow-wrap: break-word;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  /* colour is set inline to the carrier's own neon colour (companyColor) —
+     a light same-hue glow, not the full neon-sign bloom. */
+  text-shadow:
+    0 0 4px currentColor,
+    0 0 11px color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.itinerary .leg-sched {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* Full-width rule between consecutive legs. */
+.itinerary .leg-sep {
+  grid-column: 1 / -1;
+  margin: 3px 0;
+  border-top: 1px solid rgba(231, 230, 245, 0.16);
+}
+
+.itinerary .leg-line {
+  display: block;
+  white-space: nowrap;
+}
+
+.itinerary .leg-line b {
+  color: #f5f3ff;
+  text-shadow:
+    0 0 5px rgba(var(--neon-rgb), 0.45),
+    0 0 12px rgba(var(--neon-rgb), 0.24);
+}
+
+.itinerary .arrow {
+  opacity: 0.5;
+}
+
+.itinerary .leg-meta {
+  display: block;
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+
+.itinerary .layover {
+  display: block;
+  margin-top: 1px;
+  font-size: 0.7rem;
+  color: #ffcc4d;
+}
+
+.itinerary .total {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(231, 230, 245, 0.28);
+  font-weight: 700;
+  color: #f5f3ff;
+}
+
+.itinerary .total-label {
+  margin-right: 5px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a79fd1;
+}
+
+.itinerary .total-time {
+  color: #eafffb;
+  text-shadow:
+    0 0 3px rgba(var(--neon-rgb), 0.6),
+    0 0 10px rgba(var(--neon-rgb), 0.55),
+    0 0 20px rgba(var(--neon-rgb), 0.28);
+}
+
+/* Route map — a fixed-height frame; RouteMap observes its width and hands
+   it to Plotly explicitly (react-plotly.js only tracks window resize). */
+
+.route-map {
+  flex: 1;
+  min-width: 0;
+  height: 600px;
+  border: 1px solid var(--panel-border-color);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+}
+
+/* Airport picker popover */
+
+.airport-picker-popover {
+  position: fixed;
+  z-index: 100;
+  background: #140a24;
+  border: 1px solid var(--panel-border-color);
+  border-radius: 10px;
+  box-shadow:
+    0 0 26px rgba(var(--neon-rgb), 0.15),
+    0 4px 20px rgba(0, 0, 0, 0.5);
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  max-width: 18rem;
+  color: #e7e6f5;
+}
+
+.airport-picker-label {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: #f5f3ff;
+}
+
+.airport-picker-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.airport-picker-actions button {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+  border: 1px solid rgba(var(--neon-rgb), 0.65);
+  border-radius: 6px;
+  background: transparent;
+  color: rgb(var(--neon-rgb));
+  cursor: pointer;
+}
+
+.airport-picker-actions button:hover {
+  background: rgba(var(--neon-rgb), 0.2);
+  color: #f5f3ff;
+}
+
+.airport-picker-actions button.dismiss {
+  border-color: rgba(231, 230, 245, 0.3);
+  color: #a79fd1;
+  margin-left: auto;
+}
+
+.airport-picker-actions button.dismiss:hover {
+  background: rgba(231, 230, 245, 0.12);
+  color: #f5f3ff;
+}
+
+/* Price trend chart — container look comes from .panel. */
+
+.price-trend h2 {
+  font-size: 1.1rem;
+  margin-top: 0;
+  margin-bottom: 0.25rem;
+  color: #f5f3ff;
+}
+
+.trend-caption {
+  color: #a79fd1;
+  font-size: 0.8rem;
+  margin: 0.25rem 0 0;
+}
+
+/* Progress bar */
+
+.progress-bar {
+  margin-bottom: 1rem;
+}
+
+.progress-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(231, 230, 245, 0.15);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, rgb(var(--neon-rgb)), #fc00ca);
+  box-shadow: 0 0 8px rgba(var(--neon-rgb), 0.6);
+  transition: width 0.2s ease;
+}
+
+.progress-bar-label {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: #a79fd1;
+}

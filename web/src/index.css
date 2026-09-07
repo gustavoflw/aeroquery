@@ -1,0 +1,53 @@
+/* Full neon theme, ported from app.py's inject_neon_theme (see
+   .claude/js-migration-plan.md, Phase 6) — one fixed dark cyberpunk look,
+   not a light/dark toggle, matching the Streamlit original. */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap');
+
+* {
+  box-sizing: border-box;
+}
+
+/* Shared design tokens. Every top-level block on the page (search form,
+   price trend, and any component added later) uses the `.panel` class in
+   App.css, which is built entirely from these — so borders, glow, blur and
+   spacing stay consistent and are changed in one place. The route map and
+   airport popover pull their border/radius from the same tokens. */
+:root {
+  /* Neon accent as an "R, G, B" triple so it can be dropped into rgba().
+     Change this one line to re-tint the whole UI. */
+  --neon-rgb: 255, 255, 255;
+
+  --panel-bg: rgba(18, 10, 36, 0.55);
+  --panel-border-color: rgba(var(--neon-rgb), 0.3);
+  --panel-radius: 16px;
+  --panel-shadow:
+    0 0 24px rgba(var(--neon-rgb), 0.12),
+    0 0 60px rgba(255, 43, 214, 0.08);
+  --panel-blur: blur(10px);
+  --panel-pad: 1.5rem;
+  --section-gap: 2rem;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 12% -10%, rgba(var(--neon-rgb), 0.12), transparent 60%),
+    radial-gradient(1000px 700px at 105% 15%, rgba(255, 43, 214, 0.12), transparent 55%),
+    linear-gradient(180deg, #0a0118 0%, #050010 100%);
+  background-attachment: fixed;
+  color: #e7e6f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+}
